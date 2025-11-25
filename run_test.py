@@ -1,34 +1,49 @@
-# -*- coding: utf-8 -*-
-# @Time    : 2020/4/25 22:59
-# @Author  : Hui Wang
-
 import os
 import numpy as np
 import random
 import torch
 import argparse
 import pickle
-
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.manifold import TSNE
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
-
 from new_dataset import SASRecDataset
 from new_trainers import FinetuneTrainer
 from new_models import S3RecModel
 from utils import EarlyStopping, get_user_seqs, get_item2attribute_json, check_path, set_seed, data_aug
 
+from pic import *
+
+def get_fusion_method(args):
+        """获取当前模型的融合方法类型"""
+        if  args.MMOE:
+            print("mmoe:",args.MMOE)
+            return "MMOE"
+        elif args.MLP:
+            return "MLP"
+        elif args.Trans:
+            return "Transformer"
+        else:
+            return "Baseline"
+
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_dir', default='../../sequential_rec/data/', type=str)
-    parser.add_argument('--output_dir', default='output/tests1/bzj_2K_', type=str)
+    parser.add_argument('--output_dir', default='output_review/', type=str)
     parser.add_argument('--data_name', default='Instruments', type=str)
+    parser.add_argument('--save_path', default='output_review/', type=str)
 
     parser.add_argument('--do_eval', action='store_true')
     parser.add_argument('--ckp', default=0, type=int, help="pretrain epochs 10, 20, 30...")
+    parser.add_argument('--auto_weight', action='store_true')
+    parser.add_argument('--plot_train', action='store_true')
+    parser.add_argument('--plot_eval', action='store_true')
 
     # model args
     parser.add_argument("--model_name", default='SASRec', type=str)
-    parser.add_argument("--hidden_size", type=int, default=32, help="hidden size of transformer model")
+    parser.add_argument("--hidden_size", type=int, default=64, help="hidden size of transformer model")
     parser.add_argument("--num_hidden_layers", type=int, default=2, help="number of layers")
     parser.add_argument('--num_attention_heads', default=2, type=int)
     parser.add_argument('--hidden_act', default="gelu", type=str) # gelu relu
@@ -45,14 +60,14 @@ def main():
 
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--log_freq", type=int, default=1, help="per epoch print res")
-    parser.add_argument("--seed", default=26, type=int)
+    parser.add_argument("--seed", default=23,type=int)
 
     parser.add_argument("--weight_decay", type=float, default=0.0, help="weight_decay of adam")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="adam first beta value")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="adam second beta value")
     parser.add_argument("--gpu_id", type=str, default="0", help="gpu_id")
 
-    parser.add_argument("--patience", type=int, default=8, help="patience for early stop")
+    parser.add_argument("--patience", type=int, default=15, help="patience for early stop")
 
     # our add params
     parser.add_argument("--sample_num", type=int, default=0, help="sample num of rank loss ")
@@ -60,10 +75,10 @@ def main():
     parser.add_argument("--rank_act", type=str, default="softmax", help="rank similarith act")
     parser.add_argument("--isfull", type=int, default=0, help="TODO")
     ##MAP
-    parser.add_argument("--MMOE", type=str, default='True', help="TODO")
+    parser.add_argument("--MMOE", action='store_true')
     parser.add_argument("--attr_task", type=str, default='True', help="TODO")
-    parser.add_argument("--MLP", type=str, default='False', help="TODO")
-    parser.add_argument("--Trans", type=str, default='False', help="TODO")
+    parser.add_argument("--MLP", action='store_true')
+    parser.add_argument("--Trans",action='store_true')
     ## loss function
     parser.add_argument("--loss_type" , type=str, default='attr_loss', help="TODO")
 
@@ -85,6 +100,12 @@ def main():
 
     set_seed(args.seed)
     args.output_dir += f'{args.data_name}/'
+    if args.MMOE:
+        args.output_dir += f'MMOE/'
+    elif args.MLP:
+        args.output_dir += f'MLP/'
+    elif args.Trans:
+        args.output_dir += f'Trans/'
     check_path(args.output_dir)
 
 
@@ -92,8 +113,8 @@ def main():
     args.cuda_condition = torch.cuda.is_available() and not args.no_cuda
     
 ####数据加载
-    args.data_file = args.data_dir + args.data_name + '.txt'
-    item2attribute_file = args.data_dir + args.data_name + '_item2attributes.json'
+    args.data_file = os.path.join(args.data_dir+args.data_name, args.data_name + '.txt')
+    item2attribute_file = os.path.join(args.data_dir+args.data_name, args.data_name + '_item2attributes.json')
 
     user_seq, max_item, valid_rating_matrix, test_rating_matrix = \
         get_user_seqs(args.data_file)
@@ -135,13 +156,13 @@ def main():
             args.multi_modal_weight = pickle.load(open(f'/mnt/HDD2/lfy/SR_repo/multi_modal_dataset/{args.data_name}/{args.data_name}_clip_weights_finetune_minloss.pkl','rb'))
         else:
             args.multi_modal_weight = pickle.load(open(f'/mnt/HDD2/lfy/SR_repo/multi_modal_dataset/{args.data_name}/{args.data_name}_clip_weights_finetune_minloss_single.pkl','rb'))
-        if args.ablation_code == 4:            
-            args.MMOE = False
-        else:
-            args.MMOE = True
-        args.MMOE = True
-        args.MLP = False
-        print(args.MMOE)
+        # if args.ablation_code == 4:            
+        #     args.MMOE = False
+        # else:
+        #     args.MMOE = True
+        # args.MMOE = True
+        # args.MLP = False
+        print("mmoe:",args.MMOE)
         args.attr_task = True
 
     args.clip_hidden_unit = 512
@@ -250,7 +271,7 @@ def main():
     for model_name in model_args:
         model_args[model_name]()
         
-
+        
         args_str = f'{args.model_name}-{args.data_name}-{args.ckp}-{args.loss_type}'
         args.log_file = os.path.join(args.output_dir, args_str + '.txt')
         print
@@ -274,19 +295,49 @@ def main():
                                 test_dataloader, args)
 
         if args.do_eval:
-            
-            #change pretrained_path from model saved last time 
-            #pretrained_path = os.path.join(args.output_dir,args_str, +'.pt')
-            
-            
-            pretrained_path = os.path.join('reproduce/', f'{args.data_name}-epochs-{args.ckp}.pt')
-            # trainer.load(args.checkpoint_path)
-            trainer.load(pretrained_path)
-            # print(f'Load model from {args.checkpoint_path} for test!')
+
+            pretrained_path = os.path.join(args.output_dir, f'SASRec-{args.data_name}-{args.ckp}-CCE.pt')
             print(f'Load model from {pretrained_path} for test!')
-            scores, result_info = trainer.test(0, full_sort=True)
-            print('Test result score:',scores)
-            print('Test result:',result_info)    
+            all_embeddings = []
+            
+            print("\n开始运行方法...")
+            if args.plot_eval:
+                try:
+                    _, _, collected_embeddings = trainer.test(0, full_sort=True, collect_embeddings=True)
+                    if isinstance(collected_embeddings, dict):
+                        collected_embeddings['method'] = get_fusion_method(args)
+                        print(collected_embeddings['method'])
+                        filtered_emb = {}
+                        for k, v in collected_embeddings.items():
+                            if k == 'method':
+                                filtered_emb[k] = v 
+                            else:
+                                if v is not None and isinstance(v, np.ndarray) and v.shape[0] > 0:
+                                    filtered_emb[k] = v
+                        collected_embeddings = filtered_emb
+                        all_embeddings.append(collected_embeddings)
+                        print(f"嵌入收集完成，有效模态：{list(collected_embeddings.keys())}")
+                    else:
+                        print(f"收集的嵌入格式错误（非字典），跳过该方法")
+                except Exception as e:
+                    print(f"收集嵌入时出错：{str(e)}，跳过该方法")
+
+                scores, result_info = trainer.test(0, full_sort=True)
+
+                save_dir = 'output_review/tsne'
+                for emb_dict in all_embeddings:
+                    method = emb_dict.get('method', 'unknown')
+                    print(f"\n开始绘制 {method} 方法的可视化图...")
+                    plot_combined_visualization_tsne(
+                        emb_dict=emb_dict,
+                        data_name=args.data_name,
+                        save_dir=save_dir,
+                        target_dim=64
+                    )
+
+                print(f"\n对比可视化图已保存到：{save_dir}")
+                print('Test result score:',scores)
+                print('Test result:',result_info)    
 
         ### model_train
         else:
@@ -300,7 +351,7 @@ def main():
             except FileNotFoundError:
                 print(f'{pretrained_path} Not Found! The Model is same as SASRec')
             
-            ##早停--10步之内无变化
+            
             early_stopping = EarlyStopping(args.checkpoint_path, patience=args.patience,verbose=True)
             
             ##默认200轮
@@ -314,15 +365,21 @@ def main():
                 if early_stopping.early_stop:
                     print("Early stopping")
                     break
-            
-            trainer.args.train_matrix = test_rating_matrix###？？？？？？？？？？？？？
+            if args.plot_train:
+                if args.auto_weight:
+                    trainer.plot_final_results()
+                else:
+                    trainer.plot_final_losses()
+                trainer.args.train_matrix = test_rating_matrix###？？？？？？？？？？？？？
 
             print('---------------Change to test_rating_matrix!-------------------')
 
             # load the best model
             print("our best model:", args.checkpoint_path)
             trainer.model.load_state_dict(torch.load(args.checkpoint_path))
+            # 使用测试集的 dataloader 计算权重（仅用前5个 batch 以节省时间）
             _, full_info = trainer.test(epoch, full_sort=True, verbose=True)
+            
         
         print('------------------End of Test------------------')
         print(args_str)
@@ -330,8 +387,8 @@ def main():
     
         with open(args.log_file, 'a') as f:
             f.write(args_str + '\n')
-            # f.write(sample_info + '\n')
             f.write(full_info + '\n')
+
     
         model_result[model_name] = model_name + ' full metric: ' + str(full_info)  + '\n' + \
                                 str(post_fix)

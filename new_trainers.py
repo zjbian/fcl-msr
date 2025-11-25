@@ -1,13 +1,16 @@
 import numpy as np
 import tqdm
 import random
-
+import os
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-
+import matplotlib.pyplot as plt
+from datetime import datetime
 from utils import recall_at_k, ndcg_k, get_metric
-
+import csv
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 'SimHei' 是黑体
+plt.rcParams['axes.unicode_minus'] = False    # 解决负号 '-' 显示为方块的问题
 
 class Trainer:
     def __init__(self, model, train_dataloader,
@@ -40,15 +43,19 @@ class Trainer:
     def valid(self, epoch, full_sort=False, verbose = False):
         return self.iteration(epoch, self.eval_dataloader, full_sort, train=False, verbose = verbose)
 
-    def test(self, epoch, full_sort=False, verbose = False):
+    def test(self, epoch, full_sort=False, verbose = False,collect_embeddings=False):
 
         # if hasattr(self.args, 'gap'):
         #     if self.args.gap != 0:
         #         user_seq = self.test_dataloader.dataset.user_seq
         #         from utils import generate_rating_matrix_test
         #         self.args.train_matrix = generate_rating_matrix_test(user_seq, len(user_seq), self.args.item_size)
-
-        return self.iteration(epoch, self.test_dataloader, full_sort, train=False, verbose = verbose)
+        if collect_embeddings:
+            metrics, result_info, collected_embeddings = self.iteration(epoch, self.test_dataloader, full_sort, train=False, verbose=verbose, collect_embeddings=collect_embeddings)
+            return metrics, result_info, collected_embeddings
+        else:
+            return self.iteration(epoch, self.test_dataloader, full_sort, train=False, verbose=verbose)
+        
 
     def iteration(self, epoch, dataloader, full_sort=False, train=True):
         raise NotImplementedError
@@ -371,8 +378,128 @@ class FinetuneTrainer(Trainer):
             eval_dataloader,
             test_dataloader, args
         )
+        self.best_alpha_save_path = os.path.join(self.args.save_path, "best_model_alpha.csv")
+        self.plot_save_path = self.args.save_path
+        self.epochs_record = []
+        self.alpha_rec_record = []
+        self.alpha_attr_record = []
+        self.alpha_clip_record = []
+        self.loss1_record = []    # 推荐损失
+        self.loss2_record = []    # 属性损失
+        self.loss3_record = []    # CLIP损失
+        self.ndcg10_record = []   # 评估指标 NDCG@10
+        self.recall10_record = [] # 评估指标 Recall@10
+        self.recall50_record = [] # 评估指标 Recall@50
+        self.ndcg50_record = []   # 评估指标 NDCG@50
+    def _compute_best_model_alpha(self, dataloader):
+        """
+        计算最优模型的稳定任务权重 α。
+        该方法独立于训练循环，使用少量验证/测试数据来求解。
+        """
+        self.model.eval()
+        alpha_list = []
+        max_batches = 5  # 使用少量 batch 来计算稳定权重
+        batch_count = 0
 
-    def iteration(self, epoch, dataloader, full_sort=False, train=True, verbose = False):
+        # 使用 torch.no_grad() 来关闭梯度计算，节省计算资源
+        with torch.no_grad():
+            for batch in dataloader:
+                if batch_count >= max_batches:
+                    break
+
+                # --- 1. 处理 batch 数据 ---
+                # 根据你的代码，batch 的结构可能是：
+                # user, item, label, ... 等
+                # 我们需要从中提取出 finetune 方法需要的 input_ids 和 attrs
+                # 这里假设你的 batch 是一个元组，并且 input_ids 在第1位，attrs 在第5位
+                # 你可能需要根据你实际的 batch 结构进行调整！
+                # 例如，如果你的 batch 是 (user_ids, input_ids, target_pos, target_neg, attrs, target_attr)
+                # 那么 indices 可能是 [1, 4]
+                try:
+                    # *** 请根据你的实际情况调整这里的索引 ***
+                    # 假设 batch 中包含 input_ids 和 attrs
+                    # 这里是一个通用的提取方式，你需要根据你的 DataLoader 返回的 batch 结构来修改
+                    input_ids = batch[1].to(self.device)
+                    attrs = batch[4].to(self.device)
+                except IndexError or TypeError as e:
+                    print(f"警告：在计算 alpha 权重时，无法从 batch 中提取 input_ids 和 attrs。跳过此 batch。错误: {e}")
+                    continue
+
+                # --- 2. 前向传播获取模型输出 ---
+                try:
+                    sequence_output, attr_out, image_out, text_out, _ = self.model.finetune(input_ids, attrs)
+                except Exception as e:
+                    print(f"警告：在计算 alpha 权重时，模型前向传播失败。跳过此 batch。错误: {e}")
+                    continue
+
+                # --- 3. 计算各个任务的损失 ---
+                # 为了求解 alpha，我们需要计算每个任务的损失
+                try:
+                    # 假设 target_pos 在 batch 的第2位
+                    target_pos = batch[2].to(self.device)
+                    loss1 = self.cce_loss(sequence_output, target_pos)
+
+                    # 假设 target_attr 在 batch 的第5位
+                    target_attr = batch[5].to(self.device)
+                    loss2 = self.attr_loss(attr_out, target_attr)
+
+                    # CLIP 损失
+                    loss3 = 0.1 * self.model.clip_pretrain_loss(image_out, text_out, target_pos)
+                except Exception as e:
+                    print(f"警告：在计算 alpha 权重时，损失计算失败。跳过此 batch。错误: {e}")
+                    continue
+
+                # --- 4. 调用 compute_task_losses_and_grads 来获取梯度 ---
+                # 注意：这里我们重新开启梯度计算，因为需要计算任务的梯度来求解 alpha
+                # 但是，我们会使用 .detach() 来避免影响模型参数
+                try:
+                    # 临时启用梯度计算
+                    with torch.enable_grad():
+                        task_losses, task_shared_grads, _ = self.model.compute_task_losses_and_grads(
+                            sequence_output.detach(),  #  detach() 防止计算图污染
+                            attr_out.detach(),
+                            image_out.detach(),
+                            text_out.detach(),
+                            target_pos,
+                            target_attr,
+                            [loss1, loss2, loss3]
+                        )
+                except Exception as e:
+                    print(f"警告：在计算 alpha 权重时，获取任务梯度失败。跳过此 batch。错误: {e}")
+                    continue
+
+                # --- 5. 过滤无效梯度并求解 alpha ---
+                task_shared_grads = [g for g in task_shared_grads if g is not None and g.numel() > 0]
+                if len(task_shared_grads) == 3:  # 确保我们有三个有效的任务梯度
+                    alpha = self.model.frank_wolfe_solver(task_shared_grads)
+                    alpha_list.append(alpha.cpu().numpy())
+                    print(f"  Batch {batch_count+1} 计算得到 alpha: {alpha.cpu().numpy().round(4)}")
+
+                batch_count += 1
+
+        # --- 6. 计算最终的稳定权重 ---
+        if not alpha_list:
+            print("警告：未能计算出任何有效的 alpha 权重。请检查 _compute_best_model_alpha 方法中的 batch 数据提取部分。")
+            print("返回默认均匀权重 [0.333, 0.333, 0.333]。")
+            return np.array([0.333, 0.333, 0.333])
+        
+        # 对多个 batch 的 alpha 结果取平均，并归一化
+        best_alpha = np.mean(alpha_list, axis=0)
+        best_alpha = best_alpha / best_alpha.sum()  # 归一化，确保和为 1
+        return best_alpha.round(4)
+    def _get_model_shared_params(self):
+        """获取模型的共享参数（调用模型类的 get_shared_params 方法）"""
+        if hasattr(self.model, 'get_shared_params'):
+            return self.model.get_shared_params()
+        return []
+
+    def _get_model_task_specific_params(self):
+        """获取模型的任务特定参数（调用模型类的 get_task_specific_params 方法）"""
+        if hasattr(self.model, 'get_task_specific_params'):
+            return self.model.get_task_specific_params()
+        return []
+
+    def iteration(self, epoch, dataloader, full_sort=False, train=True, verbose = False, collect_embeddings=False):
 
         str_code = "train" if train else "test"
 
@@ -382,6 +509,17 @@ class FinetuneTrainer(Trainer):
                                   desc="Recommendation EP_%s:%d" % (str_code, epoch),
                                   total=len(dataloader),
                                   bar_format="{l_bar}{r_bar}")
+
+        collected_embeddings = None
+        if collect_embeddings and not train:
+            self.fusion_method = self.get_fusion_method()
+            # 新增 'Fused' 键，收集全局融合特征
+            collected_embeddings = {
+                'method': self.fusion_method,
+                'ID': [], 'Attr': [], 'Img': [], 'Text': [], 'Fused': []
+            }
+
+
         if train:
             self.model.train()
             rec_avg_loss = 0.0
@@ -393,6 +531,7 @@ class FinetuneTrainer(Trainer):
             cur_loss2 = 0.0
             cur_loss3 = 0.0
 
+            batch_alphas = []
 
             for i, batch in rec_data_iter:
                 # 0. batch_data will be sent into the device(GPU or CPU)
@@ -408,20 +547,20 @@ class FinetuneTrainer(Trainer):
 
                 finetune_called = False  # 标志，确保只调用一次 finetune
                 if self.args.Ours:
-                    if hasattr(self.args, 'MMOE') and self.args.MMOE and not finetune_called:
-                        # print("hasattr--->MMOE",self.args.MMOE)
-                        sequence_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
+                    if self.args.MMOE and not finetune_called:
+                        print("hasattr--->MMOE",self.args.MMOE)
+                        sequence_output, attr_out, image_out, text_out,_ = self.model.finetune(input_ids, attrs)
                         finetune_called = True
-                    elif hasattr(self.args, 'MLP') and self.args.MLP and not finetune_called:
+                    elif self.args.MLP and not finetune_called:
                         # print("hasattr--->MLP",self.args.MLP)
                         print("hasattr--->MLP")
-                        sequence_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
+                        sequence_output, attr_out, image_out, text_out,_ = self.model.finetune(input_ids, attrs)
                         # print(sequence_output.shape)
                         finetune_called = True
-                    elif hasattr(self.args, 'Trans') and self.args.Trans and not finetune_called:
+                    elif self.args.Trans and not finetune_called:
                         print("hasattr--->Transformer")
                         # print(input_ids.shape)
-                        sequence_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
+                        sequence_output, attr_out, image_out, text_out,_ = self.model.finetune(input_ids, attrs)
                         # print(sequence_output.shape)
                         finetune_called = True
                     elif not finetune_called:
@@ -430,64 +569,65 @@ class FinetuneTrainer(Trainer):
                     sequence_output = self.model.finetune(input_ids, attrs)              
 
 
-                # if self.args.Ours:
-                #     if hasattr(self.args, 'MMOE'):
-                #         # print("hasattr--->MMOE")
-                #         if self.args.MMOE:
-                #             sequence_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
-                #     if hasattr(self.args, 'MLP'):
-                #         # print("hasattr--->MLP")
-                #         if self.args.MLP:
-                #             sequence_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
-                #     else:
-                #         sequence_output = self.model.finetune(input_ids, attrs)
-                # else:
-                #     sequence_output = self.model.finetune(input_ids, attrs)
-
-                # if self.args.loss_type == 'BCE':
-                #     loss = self.bce_loss(sequence_output, target_pos, target_neg, self.args.sample_num)
-                # if self.args.loss_type == 'CCE':  # Ours
-                ## CCEloss---nip
-                loss1 = self.cce_loss(sequence_output, target_pos)
-                # elif self.args.loss_type == 'BPR':
-                #     loss = self.bpr_loss(sequence_output[:, -1, :], 
-                #                         target_pos, 
-                #                         sample_num = self.args.sample_num)
-                # elif self.args.loss_type == 'BPR-max':
-                #     loss = self.bpr_loss(sequence_output[:, -1, :], 
-                #                         target_pos, 
-                #                         sample_num = self.args.sample_num,
-                #                         use_softmax = True)
-                # elif self.args.loss_type == 'TOP1':
-                #     loss = self.top1_loss(sequence_output[:, -1, :], 
-                #                         target_pos, 
-                #                         sample_num = self.args.sample_num)
-                # elif self.args.loss_type == 'TOP1-max':
-                #     loss = self.top1_loss(sequence_output[:, -1, :], 
-                #                         target_pos, 
-                #                         sample_num = self.args.sample_num,
-                #                         use_softmax = True)
-                # elif self.args.loss_type == 'CE':
-                #     loss = self.ce_loss(sequence_output, target_pos)
-                # elif self.args.loss_type == 'MLM':
-                #     loss = self.mlm_loss(sequence_output, target_pos)
-                # elif  self.args.loss_type == 'attr_loss':
-                #     loss = self.attr_loss(attr_out, target_attr)
-                #TODO add Lambdarankloss 
                 
-                # if hasattr(self.args, 'multi_modal_weight') and hasattr(self.args, 'MMOE'):
-                #     if self.args.attr_task == True and self.args.MMOE == True:
-                #     # if i % 10 == 0 :
-                #         loss3 = 0.1*self.model.clip_pretrain_loss(image_out, text_out, target_pos)
+                ## CCEloss---nip
+                loss1 = self.cce_loss(sequence_output, target_pos)            
                 loss3 = 0.1*self.model.clip_pretrain_loss(image_out, text_out, target_pos)
-                # if hasattr(self.args, 'attr_task') and hasattr(self.args, 'MMOE'):
-                #     if self.args.attr_task == True and self.args.MMOE == True:
-                #         loss2 = self.attr_loss(attr_out, target_attr)
                 loss2 = self.attr_loss(attr_out, target_attr)
                 loss = loss1 + loss3 + loss2
-                self.optim.zero_grad()
-                loss.backward()
-                self.optim.step()
+
+                loss_lst = [loss1, loss2, loss3]
+                alpha = None # 占位符
+                if hasattr(self.model, 'compute_task_losses_and_grads') and hasattr(self.model, 'frank_wolfe_solver') and self.args.auto_weight:
+                    print("# 开始多任务梯度处理")
+                    # 1. 计算各任务损失、共享参数梯度
+                    task_losses, task_shared_grads, shared_params = self.model.compute_task_losses_and_grads(
+                        sequence_output, attr_out, image_out, text_out, target_pos, target_attr,loss_lst
+                    )
+
+                    # 2. 过滤无效梯度（避免空列表报错）
+                    task_shared_grads = [g for g in task_shared_grads if g is not None and g.numel() > 0]
+                    if len(task_shared_grads) != len(task_losses):
+                        # 梯度收集失败，降级为原有更新逻辑
+                        self.optim.zero_grad()
+                        loss.backward()
+                        self.optim.step()
+                        print(f"Warning: Batch {i} 梯度收集失败，使用原有更新逻辑")
+                    else:
+                        print("# 梯度收集success")
+                        # 3. Frank-Wolfe 求解梯度权重 α（Algorithm 2 核心）
+                        alpha = self.model.frank_wolfe_solver(task_shared_grads)
+                        # 每 50 个 batch 打印一次权重（避免日志冗余）
+                        if i % 50 == 0:
+                            print(f"Batch {i} - α权重：推荐={alpha[0]:.3f}, 属性={alpha[1]:.3f}, CLIP={alpha[2]:.3f}")
+
+                        # 4. 清零所有参数梯度
+                        self.optim.zero_grad()
+
+                        # 5. 共享参数：加权梯度更新（Algorithm 2 共享参数更新规则）
+                        shared_loss = alpha[0] * task_losses['rec'] + alpha[1] * task_losses['attr'] + alpha[2] * task_losses['clip']
+                        shared_loss.backward(retain_graph=True)
+                        print("shared_loss.backward() done:", shared_loss.item())
+
+                        # 6. 任务特定参数：独立梯度更新（Algorithm 2 任务特定参数更新规则）
+                        task_specific_params = self._get_model_task_specific_params()
+                        if task_specific_params:
+                            print("# 存在任务特定参数，进行独立更新")
+                            # 若有任务特定参数，用原始损失更新
+                            task_specific_loss = loss1 + loss2 + loss3
+                            task_specific_loss.backward()
+
+                        # 7. 优化器更新（同时更新共享参数和任务特定参数）
+                        self.optim.step()
+                else:
+                    # 原有单任务更新逻辑
+                    self.optim.zero_grad()
+                    loss.backward()
+                    self.optim.step()
+                if alpha is not None:
+                    batch_alphas.append(alpha.cpu().numpy())
+                
+    
 
                 rec_avg_loss += loss.item()
                 rec_cur_loss = loss.item()
@@ -501,8 +641,21 @@ class FinetuneTrainer(Trainer):
                 ## loss3 for clip
                 avg_loss3 += loss3.item()
                 cur_loss3 = loss3.item()
-
-
+            self.loss1_record.append(avg_loss1 / len(rec_data_iter))
+            self.loss2_record.append(avg_loss2 / len(rec_data_iter))
+            self.loss3_record.append(avg_loss3 / len(rec_data_iter))
+            self.epochs_record.append(epoch)
+            if batch_alphas:
+                avg_alpha = np.mean(batch_alphas, axis=0)
+                self.alpha_rec_record.append(avg_alpha[0])
+                self.alpha_attr_record.append(avg_alpha[1])
+                self.alpha_clip_record.append(avg_alpha[2])
+            else:
+                print("Warning: 本 epoch 未记录到任何 α 权重，可能是梯度收集失败。")
+                # 如果没有记录到权重，填充0或跳过
+                self.alpha_rec_record.append(0)
+                self.alpha_attr_record.append(0)
+                self.alpha_clip_record.append(0)
             post_fix = {
                 "epoch": epoch,
                 "rec_avg_loss": '{:.8f}'.format(rec_avg_loss / len(rec_data_iter)),
@@ -512,7 +665,7 @@ class FinetuneTrainer(Trainer):
                 "avg_loss2": '{:.8f}'.format(avg_loss2 / len(rec_data_iter)),
                 "cur_loss2": '{:.8f}'.format(cur_loss2),
                 "avg_loss3": '{:.8f}'.format(avg_loss3 / len(rec_data_iter)),
-                "cur_loss3": '{:.8f}'.format(cur_loss3),
+                "cur_loss3": '{:.8f}'.format(cur_loss3)
             }
 
             if verbose:
@@ -539,38 +692,34 @@ class FinetuneTrainer(Trainer):
                     # recommend_output, attr_out,image_out, text_out = self.model.finetune(input_ids, attrs)
 
                     if self.args.Ours:
-                        
-                        if hasattr(self.args, 'MMOE'):
-                            if self.args.MMOE:
-                                recommend_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
-                            else:
-                                recommend_output = self.model.finetune(input_ids, attrs)
+                        if self.args.MMOE:
+                            recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                    # MLP 分支（解除注释，正确接收 original_embeddings）
+                        elif self.args.MLP:
+                            recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                        # Trans 分支（解除注释，正确接收 original_embeddings）
+                        elif self.args.Trans:
+                            recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
                         else:
-                            recommend_output = self.model.finetune(input_ids, attrs)
+                        # 若 finetune 返回 5 个值，适配接收；否则按原逻辑
+                            try:
+                                recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                            except:
+                                recommend_output = self.model.finetune(input_ids, attrs)
                     else:
-                        recommend_output = self.model.finetune(input_ids, attrs)
+                        try:
+                            recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                        except:
+                            recommend_output = self.model.finetune(input_ids, attrs)
 
-                    #     if hasattr(self.args, 'MLP'):
-                    #         if self.args.MLP:
-                    #             recommend_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
-                    #         else:
-                    #             recommend_output = self.model.finetune(input_ids, attrs)
-                    #     else:
-                    #         recommend_output = self.model.finetune(input_ids, attrs)
-                    # else:
-                    #     recommend_output = self.model.finetune(input_ids, attrs)
-
-                    #     if hasattr(self.args, 'Trans'):
-                    #         if self.args.Trans:
-                    #             recommend_output, attr_out, image_out, text_out = self.model.finetune(input_ids, attrs)
-                    #         else:
-                    #             recommend_output = self.model.finetune(input_ids, attrs)
-                    #     else:
-                    #         recommend_output = self.model.finetune(input_ids, attrs)
-                    # else:
-                    #     recommend_output = self.model.finetune(input_ids, attrs)
                     
-
+                    if collect_embeddings and original_embeddings is not None:
+                    # 遍历所有模态（含 Fused），避免遗漏
+                        for modal in ['ID', 'Attr', 'Img', 'Text', 'Fused']:
+                            if modal in original_embeddings and original_embeddings[modal] is not None:
+                                # 确保嵌入是 2D 数组（n_samples, dim），避免维度错误
+                                if len(original_embeddings[modal].shape) == 2 and original_embeddings[modal].shape[0] > 0:
+                                    collected_embeddings[modal].append(original_embeddings[modal])
 
                     recommend_output = recommend_output[:, -1, :]
                     # 推荐的结果
@@ -597,25 +746,336 @@ class FinetuneTrainer(Trainer):
                     else:
                         pred_list = np.append(pred_list, batch_pred_list, axis=0)
                         answer_list = np.append(answer_list, answers.cpu().data.numpy(), axis=0)
-                return self.get_full_sort_score(epoch, answer_list, pred_list, verbose)
+                if collect_embeddings:
+                # 合并所有 batch 的嵌入（过滤空列表）
+                    for modal in ['ID', 'Attr', 'Img', 'Text', 'Fused']:
+                        if len(collected_embeddings[modal]) > 0:
+                            collected_embeddings[modal] = np.vstack(collected_embeddings[modal])
+                        else:
+                            del collected_embeddings[modal]  # 删除无数据的模态
+                    metrics, result_info = self.get_full_sort_score(epoch, answer_list, pred_list, verbose)
+                    self.recall10_record.append(metrics[2])
+                    self.recall50_record.append(metrics[6])
+                    self.ndcg10_record.append(metrics[3])
+                    self.ndcg50_record.append(metrics[7])
+
+                    return metrics, result_info, collected_embeddings
+                else:
+                    metrics, result_info = self.get_full_sort_score(epoch, answer_list, pred_list, verbose)
+                    self.recall10_record.append(metrics[2])
+                    self.recall50_record.append(metrics[6])
+                    self.ndcg10_record.append(metrics[3])
+                    self.ndcg50_record.append(metrics[7])
+                    return self.get_full_sort_score(epoch, answer_list, pred_list, verbose)
+                
 
             else:
                 for i, batch in rec_data_iter:
                     # 0. batch_data will be sent into the device(GPU or cpu)
                     batch = tuple(t.to(self.device) for t in batch)
                     user_ids, input_ids, target_pos, target_neg, answers, sample_negs, attrs = batch
-                    recommend_output = self.model.finetune(input_ids)
+
+                    
+                    
+                    if self.args.Ours:
+                            if self.args.MMOE:
+                                recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                            elif self.args.MLP:
+                                recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                            elif self.args.Trans:
+                                recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                            else:
+                                try:
+                                    recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                                except:
+                                    recommend_output = self.model.finetune(input_ids, attrs)
+                    else:
+                        try:
+                            recommend_output, attr_out, image_out, text_out, original_embeddings = self.model.finetune(input_ids, attrs)
+                        except:
+                            recommend_output = self.model.finetune(input_ids, attrs)
+
+                    if collect_embeddings and original_embeddings is not None:
+                        for modal in ['ID', 'Attr', 'Img', 'Text', 'Fused']:
+                            if modal in original_embeddings and original_embeddings[modal] is not None:
+                                if len(original_embeddings[modal].shape) == 2 and original_embeddings[modal].shape[0] > 0:
+                                    collected_embeddings[modal].append(original_embeddings[modal])
+                    
                     test_neg_items = torch.cat((answers, sample_negs), -1)
                     recommend_output = recommend_output[:, -1, :]
 
                     test_logits = self.predict_sample(recommend_output, test_neg_items)
                     test_logits = test_logits.cpu().detach().numpy().copy()
+                    
                     if i == 0:
                         pred_list = test_logits
                     else:
                         pred_list = np.append(pred_list, test_logits, axis=0)
+                if collect_embeddings:
+                # 合并嵌入
+                    for modal in ['ID', 'Attr', 'Img', 'Text', 'Fused']:
+                        if len(collected_embeddings[modal]) > 0:
+                            collected_embeddings[modal] = np.vstack(collected_embeddings[modal])
+                        else:
+                            del collected_embeddings[modal]
+                    metrics, result_info = self.get_sample_scores(epoch, pred_list, verbose)
+                    return metrics, result_info, collected_embeddings
+                else:
+                    return self.get_sample_scores(epoch, pred_list, verbose)
 
-                return self.get_sample_scores(epoch, pred_list, verbose)
+    def plot_final_losses(self):
+        """在训练结束后，绘制并保存损失变化图表，并将损失数据保存到CSV文件。"""
+        if not self.epochs_record:
+            print("警告：没有记录到训练数据，无法生成图表。")
+            return
+
+        print("\n训练结束，正在生成损失图表并保存数据...")
+
+        # --- 1. 保存损失数据到 CSV 文件 ---
+        data_filename = f"{self.args.data_name}_loss_no_auto.csv"
+        data_save_path = os.path.join(self.plot_save_path, data_filename)
+        os.makedirs(self.plot_save_path, exist_ok=True)
+        try:
+            with open(data_save_path, mode='w', newline='', encoding='utf-8') as csv_file:
+                fieldnames = ['Epoch', 'Loss1_Rec', 'Loss2_Attr', 'Loss3_Clip']
+                writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+                writer.writeheader()
+                for i in range(len(self.epochs_record)):
+                    writer.writerow({
+                        'Epoch': self.epochs_record[i],
+                        'Loss1_Rec': self.loss1_record[i] if i < len(self.loss1_record) else None,
+                        'Loss2_Attr': self.loss2_record[i] if i < len(self.loss2_record) else None,
+                        'Loss3_Clip': self.loss3_record[i] if i < len(self.loss3_record) else None,
+                    })
+            print(f"损失数据已成功保存至: {data_save_path}")
+        except Exception as e:
+            print(f"警告：保存损失数据时发生错误: {e}")
+
+        # --- 全局字体设置 ---
+        plt.rcParams['font.family'] = 'Times New Roman'
+        plt.rcParams['font.size'] = 14
+
+        # --- 准备 Y 轴数据以供调整 ---
+        all_losses = []
+        if self.loss1_record:
+            all_losses.extend(self.loss1_record)
+        if self.loss2_record:
+            all_losses.extend(self.loss2_record)
+        if self.loss3_record:
+            all_losses.extend(self.loss3_record)
+
+        if not all_losses:
+            print("警告：没有有效的损失数据，无法绘制图表。")
+            return
+
+        y_min, y_max = min(all_losses), max(all_losses)
+        # 为 Y 轴范围增加一些边距，使其更美观
+        y_margin = (y_max - y_min) * 0.1
+        y_lim = [y_min - y_margin, y_max + y_margin]
+        # 定义 Y 轴刻度，使其均匀分布
+        y_ticks = np.linspace(y_lim[0], y_lim[1], 6)  # 生成 6 个均匀分布的刻度
+
+        # --- 2. 绘制第一个图：每个 Epoch 的损失变化 ---
+        fig1, ax1 = plt.subplots(figsize=(16, 8))
+        if self.loss1_record:
+            ax1.plot(self.epochs_record, self.loss1_record, 'r-', label='Reconstruction Loss (Loss1)', linewidth=3,
+                    marker='o', markersize=6)
+        if self.loss2_record:
+            ax1.plot(self.epochs_record, self.loss2_record, 'g-', label='Attribute Loss (Loss2)', linewidth=3, marker='s',
+                    markersize=6)
+        if self.loss3_record:
+            ax1.plot(self.epochs_record, self.loss3_record, 'b-', label='CLIP Loss (Loss3)', linewidth=3, marker='^',
+                    markersize=6)
+
+        ax1.set_xlabel('Epoch', fontsize=20)
+        ax1.set_ylabel('Loss Value', fontsize=20)
+        ax1.legend(loc='best', fontsize=18)
+        ax1.set_ylim(y_lim)
+        ax1.set_yticks(y_ticks)
+        ax1.set_xlim(min(self.epochs_record), max(self.epochs_record))
+        # 设置 X 轴刻度为每 5 个 epoch
+        ax1.set_xticks(range(min(self.epochs_record), max(self.epochs_record) + 1, 5))
+        ax1.tick_params(axis='both', which='major', labelsize=16)
+
+        plot1_filename = f"{self.args.data_name}_losses_all_epochs.png"
+        plot1_save_path = os.path.join(self.plot_save_path, plot1_filename)
+        plt.tight_layout()
+        plt.savefig(plot1_save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig1)
+        print(f"图表1 (所有Epoch损失) 已保存至: {plot1_save_path}")
+
+        # --- 3. 绘制第二个图：每 8 个 Epoch 绘制一个点 ---
+        if len(self.epochs_record) > 30:
+            step = 8
+        else:
+            step = 5
+
+        filtered_epochs = self.epochs_record[::step]
+        filtered_loss1 = self.loss1_record[::step] if self.loss1_record else []
+        filtered_loss2 = self.loss2_record[::step] if self.loss2_record else []
+        filtered_loss3 = self.loss3_record[::step] if self.loss3_record else []
+
+        # 确保最后一个 epoch 被包含
+        if filtered_epochs and filtered_epochs[-1] != self.epochs_record[-1]:
+            filtered_epochs.append(self.epochs_record[-1])
+            if self.loss1_record:
+                filtered_loss1.append(self.loss1_record[-1])
+            if self.loss2_record:
+                filtered_loss2.append(self.loss2_record[-1])
+            if self.loss3_record:
+                filtered_loss3.append(self.loss3_record[-1])
+
+        fig2, ax2 = plt.subplots(figsize=(16, 8))
+        if filtered_loss1:
+            ax2.plot(filtered_epochs, filtered_loss1, 'r-', label='Reconstruction Loss (Loss1)', linewidth=3, marker='o',
+                    markersize=10)
+        if filtered_loss2:
+            ax2.plot(filtered_epochs, filtered_loss2, 'g-', label='Attribute Loss (Loss2)', linewidth=3, marker='s',
+                    markersize=10)
+        if filtered_loss3:
+            ax2.plot(filtered_epochs, filtered_loss3, 'b-', label='CLIP Loss (Loss3)', linewidth=3, marker='^',
+                    markersize=10)
+
+        ax2.set_xlabel('Epoch', fontsize=20)
+        ax2.set_ylabel('Loss Value', fontsize=20)
+        ax2.legend(loc='best', fontsize=18)
+        ax2.set_ylim(y_lim)
+        ax2.set_yticks(y_ticks)
+        ax2.set_xlim(min(filtered_epochs), max(filtered_epochs))
+        # 为筛选后的图表也设置 X 轴刻度为每 5 个 epoch
+        ax2.set_xticks(range(min(filtered_epochs), max(filtered_epochs) + 1, 5))
+        ax2.tick_params(axis='both', which='major', labelsize=16)
+
+        plot2_filename = f"{self.args.data_name}_losses_every_{step}_epochs.png"
+        plot2_save_path = os.path.join(self.plot_save_path, plot2_filename)
+        plt.tight_layout()
+        plt.savefig(plot2_save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig2)
+        print(f"图表2 (每{step}个Epoch损失) 已保存至: {plot2_save_path}")
+
+        # --- 重置字体设置 ---
+        plt.rcParams.update(plt.rcParamsDefault)
+
+        print("损失图表和数据保存完成。")
+    def plot_final_results(self):
+        """在训练结束后，绘制并保存权重变化图表，并将权重和损失数据保存到CSV文件。"""
+        if not self.epochs_record:
+            print("警告：没有记录到训练数据，无法生成图表。")
+            return
+
+        print("\n训练结束，正在生成权重图表并保存数据...")
+
+        # --- 1. 保存权重和损失数据到 CSV 文件 ---
+        data_filename = f"{self.args.data_name}_training_data.csv"
+        data_save_path = os.path.join(self.plot_save_path, data_filename)
+        os.makedirs(self.plot_save_path, exist_ok=True)
+        try:
+            with open(data_save_path, mode='w', newline='', encoding='utf-8') as csv_file:
+                fieldnames = ['Epoch', 'Alpha_Rec', 'Alpha_Attr', 'Alpha_Clip', 'Loss1_Rec', 'Loss2_Attr', 'Loss3_Clip']
+                writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+                writer.writeheader()
+                for i in range(len(self.epochs_record)):
+                    writer.writerow({
+                        'Epoch': self.epochs_record[i],
+                        'Alpha_Rec': self.alpha_rec_record[i],
+                        'Alpha_Attr': self.alpha_attr_record[i],
+                        'Alpha_Clip': self.alpha_clip_record[i],
+                        'Loss1_Rec': self.loss1_record[i] if i < len(self.loss1_record) else None,
+                        'Loss2_Attr': self.loss2_record[i] if i < len(self.loss2_record) else None,
+                        'Loss3_Clip': self.loss3_record[i] if i < len(self.loss3_record) else None,
+                    })
+            print(f"训练数据已成功保存至: {data_save_path}")
+        except Exception as e:
+            print(f"警告：保存训练数据时发生错误: {e}")
+
+        # --- 全局字体设置 ---
+        plt.rcParams['font.family'] = 'Times New Roman'
+        plt.rcParams['font.size'] = 14
+
+        # --- 准备 Y 轴数据以供调整 ---
+        all_weights = self.alpha_rec_record + self.alpha_attr_record + self.alpha_clip_record
+        y_min, y_max = min(all_weights), max(all_weights)
+        # 为 Y 轴范围增加一些边距，使其更美观
+        y_margin = (y_max - y_min) * 0.1
+        y_lim = [y_min - y_margin, y_max + y_margin]
+        # 定义 Y 轴刻度，使其均匀分布
+        y_ticks = np.linspace(y_lim[0], y_lim[1], 6) # 生成 6 个均匀分布的刻度
+
+        # --- 2. 绘制第一个图：每个 Epoch 的权重变化 ---
+        fig1, ax1 = plt.subplots(figsize=(16, 8))
+        ax1.plot(self.epochs_record, self.alpha_rec_record, 'r-', label='Recommendation Weight (α_rec)', linewidth=3, marker='o', markersize=6)
+        ax1.plot(self.epochs_record, self.alpha_attr_record, 'g-', label='Attribute Weight (α_attr)', linewidth=3, marker='s', markersize=6)
+        ax1.plot(self.epochs_record, self.alpha_clip_record, 'b-', label='CLIP Weight (α_clip)', linewidth=3, marker='^', markersize=6)
+        
+        ax1.set_xlabel('Epoch', fontsize=20)
+        ax1.set_ylabel('Weight Value', fontsize=20)
+        ax1.legend(loc='best', fontsize=18)
+        ax1.set_ylim(y_lim)
+        ax1.set_yticks(y_ticks)
+        ax1.set_xlim(min(self.epochs_record), max(self.epochs_record))
+        # 设置 X 轴刻度为每 5 个 epoch
+        ax1.set_xticks(range(min(self.epochs_record), max(self.epochs_record) + 1, 5))
+        ax1.tick_params(axis='both', which='major', labelsize=16)
+
+        plot1_filename = f"{self.args.data_name}_weights_all_epochs.png"
+        plot1_save_path = os.path.join(self.plot_save_path, plot1_filename)
+        plt.tight_layout()
+        plt.savefig(plot1_save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig1)
+        print(f"图表1 (所有Epoch) 已保存至: {plot1_save_path}")
+
+        # --- 3. 绘制第二个图：每 8 个 Epoch 绘制一个点 ---
+        if len(self.epochs_record) > 30:
+            step = 8
+        else :
+            step = 5
+        filtered_epochs = self.epochs_record[::step]
+        filtered_alpha_rec = self.alpha_rec_record[::step]
+        filtered_alpha_attr = self.alpha_attr_record[::step]
+        filtered_alpha_clip = self.alpha_clip_record[::step]
+
+        if filtered_epochs and filtered_epochs[-1] != self.epochs_record[-1]:
+            filtered_epochs.append(self.epochs_record[-1])
+            filtered_alpha_rec.append(self.alpha_rec_record[-1])
+            filtered_alpha_attr.append(self.alpha_attr_record[-1])
+            filtered_alpha_clip.append(self.alpha_clip_record[-1])
+
+        fig2, ax2 = plt.subplots(figsize=(16, 8))
+        ax2.plot(filtered_epochs, filtered_alpha_rec, 'r-', label='Recommendation Weight (α_rec)', linewidth=3, marker='o', markersize=10)
+        ax2.plot(filtered_epochs, filtered_alpha_attr, 'g-', label='Attribute Weight (α_attr)', linewidth=3, marker='s', markersize=10)
+        ax2.plot(filtered_epochs, filtered_alpha_clip, 'b-', label='CLIP Weight (α_clip)', linewidth=3, marker='^', markersize=10)
+        
+        ax2.set_xlabel('Epoch', fontsize=20)
+        ax2.set_ylabel('Weight Value', fontsize=20)
+        ax2.legend(loc='best', fontsize=18)
+        ax2.set_ylim(y_lim)
+        ax2.set_yticks(y_ticks)
+        ax2.set_xlim(min(filtered_epochs), max(filtered_epochs))
+        # 为筛选后的图表也设置 X 轴刻度为每 5 个 epoch
+        ax2.set_xticks(range(min(filtered_epochs), max(filtered_epochs) + 1, 5))
+        ax2.tick_params(axis='both', which='major', labelsize=16)
+
+        plot2_filename = f"{self.args.data_name}_weights_every_8_epochs.png"
+        plot2_save_path = os.path.join(self.plot_save_path, plot2_filename)
+        plt.tight_layout()
+        plt.savefig(plot2_save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig2)
+        print(f"图表2 (每8个Epoch) 已保存至: {plot2_save_path}")
+
+        # --- 重置字体设置 ---
+        plt.rcParams.update(plt.rcParamsDefault)
+
+        print("图表和数据保存完成。")
+    def get_fusion_method(self):
+        """获取当前模型的融合方法类型"""
+        if self.args.MMOE:
+            return "MMOE"
+        elif self.args.MLP:
+            return "MLP"
+        elif self.args.Trans:
+            return "Transformer"
+        else:
+            return "Baseline"
 
     def get_metric(self, full_sort = False, sample_sort = False, verbose= False, epoch=None):
         self.model.eval()

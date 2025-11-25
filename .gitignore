@@ -1,5 +1,21 @@
+__pycache__/
 ./output/
 ./reproduce/
 ./sh_ablation/
 ./sh_result/
 ./sh_result_[before 2024.4.7]/
+./output_ori/
+./output_review/
+./output_auto_1/
+
+*.zip
+*.tar.gz
+*.png
+*.jpg
+*.svg
+output*/
+reproduce/
+contrarec/
+sh_ablation/
+sh_result*/
+*.txt

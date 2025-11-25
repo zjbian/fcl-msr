@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-# @Time    : 2020/3/30 10:57
-# @Author  : Hui Wang
-
 import torch
 import torch.nn as nn
 from modules import Encoder, LayerNorm
@@ -102,17 +98,6 @@ class S3RecModel(nn.Module):
         mask = mask.unsqueeze(-1).repeat(1, 1, self.args.hidden_size)
         img_emb = img_emb.masked_select(mask).view(-1, self.args.hidden_size)
         text_emb = text_emb.masked_select(mask).view(-1, self.args.hidden_size)
-        # pos_mask = (target_pos>0)
-        # seq_mask = pos_mask.unsqueeze(-1).repeat(1, 1, self.args.hidden_size)
-        # target_pos = target_pos.masked_select(pos_mask)
-        # seq_out = seq_out.masked_select(seq_mask).view(-1, self.args.hidden_size)
-        # logits = torch.matmul(seq_out, test_item_emb.transpose(0, 1))
-
-        # sequence = sequence[sequence != 0]
-
-        # img_emb = self.img_embeddings(sequence) @ self.W_img
-        # text_emb = self.img_embeddings(sequence) @ self.W_text
-
         img_emb = img_emb / img_emb.norm(p=2, dim = -1, keepdim = True)
         text_emb = text_emb / text_emb.norm(p=2 , dim = -1, keepdim = True)
 
@@ -131,11 +116,6 @@ class S3RecModel(nn.Module):
 
     # AAP
     def associated_attribute_prediction(self, sequence_output, attribute_embedding):
-        '''
-        :param sequence_output: [B L H]
-        :param attribute_embedding: [arribute_num H]
-        :return: scores [B*L tag_num]
-        '''
         sequence_output = self.aap_norm(sequence_output) # [B L H]
         sequence_output = sequence_output.view([-1, self.args.hidden_size, 1]) # [B*L H 1]
         # [tag_num H] [B*L H 1] -> [B*L tag_num 1]
@@ -287,15 +267,12 @@ class S3RecModel(nn.Module):
             attr_table[i] = self.attribute_embeddings.weight[indice].mean(0) # indice error need check run test file
         return attr_table
 
-    # Fine tune
-    # same as SASRec
     def finetune(self, input_ids, attrs):
-
         attention_mask = (input_ids > 0).long()
-        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2) # torch.int64
+        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
         max_len = attention_mask.size(-1)
         attn_shape = (1, max_len, max_len)
-        subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1) # torch.uint8
+        subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1)
         subsequent_mask = (subsequent_mask == 0).unsqueeze(1)
         subsequent_mask = subsequent_mask.long()
 
@@ -303,83 +280,137 @@ class S3RecModel(nn.Module):
             subsequent_mask = subsequent_mask.cuda()
 
         extended_attention_mask = extended_attention_mask * subsequent_mask
-        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
+        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
         sequence_emb = self.add_position_embedding(input_ids)
+        id_original_emb = sequence_emb.detach().clone()
+        img_original_emb = None
+        text_original_emb = None
+        attr_original_emb = None
+
+        img_emb = None  # 初始化，避免未定义
+        text_emb = None
+        seq_attr_output = None  # 初始化
 
         if hasattr(self.args, 'multi_modal_weight'):
             img_emb = self.args.lambda1 * self.img_embeddings(input_ids)
             text_emb = self.args.lambda2 * self.text_embeddings(input_ids)
-            
-            # if self.args.ablation_code == 2:
-            #     img_emb = torch.zeros_like(img_emb)
-            #     text_emb = torch.zeros_like(text_emb)
-            
-            # img_and_text = self.args.lambda1*img_emb + self.args.lambda2*text_emb  # 2024.3.10 version
-            img_and_text = img_emb + text_emb   # 2024.3.11 version for test 
-            
+            img_and_text = img_emb + text_emb  
+
             if self.args.ablation_code == 5:
                 img_and_text = img_emb
             elif self.args.ablation_code == 6:
                 img_and_text = text_emb
 
+            img_original_emb = img_emb.detach().clone()
+            text_original_emb = text_emb.detach().clone()
 
             if self.args.ablation_code != 1:                
                 sequence_emb, img_and_text = self.fusion_module(sequence_emb, img_and_text)
-            # sequence_emb, img_and_text = self.fusion_module(sequence_emb, img_and_text)
-            # sequence_emb += img_and_text
-        #     sequence_emb += self.args.lambda1*img_emb @ self.W_f + self.args.lambda2*text_emb @ self.W_f
 
         if hasattr(self.args, 'attr_task'):
             seq_attr = self.attribute_embeddings.weight[attrs].mean(-2)  
             seq_attr_output = self.attr_encoder(seq_attr,
                                                 extended_attention_mask,
-                                                output_all_encoded_layers=True)[-1] # here [-1] is important
+                                                output_all_encoded_layers=True)[-1]
             if self.args.ablation_code == 3:
                 seq_attr_output = torch.zeros_like(seq_attr_output)
+            attr_original_emb = seq_attr_output.detach().clone()
 
-        item_encoded_layers = self.item_encoder(sequence_emb,# + seq_attr,
+        item_encoded_layers = self.item_encoder(sequence_emb,
                                                 extended_attention_mask,
                                                 output_all_encoded_layers=True)
+        sequence_output = item_encoded_layers[-1]
 
-        # sequence_output = item_encoded_layers[-1]
-        sequence_output = item_encoded_layers[-1] #+ img_and_text
-        
-        # if hasattr(self.args, 'multi_modal_weight'):
-        #     img_emb = self.img_embeddings(input_ids)
-        #     text_emb = self.text_embeddings(input_ids)
-        #     # sequence_output += self.args.lambda1*img_emb + self.args.lambda2*text_emb
-        #     sequence_output += self.LayerNorm(self.args.lambda1*img_emb @ self.W_f + self.args.lambda2*text_emb @ self.W_f)
+        fused_attr_emb = None
+        fused_img_emb = None
+        fused_text_emb = None
+        fused_global_emb = sequence_output 
 
-        if hasattr(self.args, 'MMOE') and self.args.MMOE:
-            #print("MMOE IS TRUE IN MODELS")
-            _ ,attr_out,image_out,text_out = self.mmoe(sequence_output, seq_attr_output, [img_emb, text_emb])
-            # tmp,attr_out,image_out,text_out = self.mmoe(sequence_output, seq_attr_output, [img_emb, text_emb])
-            # sequence_output,attr_out,image_out,text_out = self.mmoe(sequence_output, seq_attr_output)
-            # sequence_output = self.mmoe(sequence_output, seq_attr_output, img_and_text)
-            # sequence_output, attr_out = self.mmoe(sequence_output, seq_attr_output)
-            # sequence_output = self.mmoe(sequence_output)
+        if self.args.MMOE:
+            sequence_output, attr_out, image_out, text_out = self.mmoe(sequence_output, seq_attr_output, [img_emb, text_emb])
+            # 提取 MMOE 融合后的单模态特征
+            fused_attr_emb = attr_out.detach().clone()    # Attr 模态经过 MMOE 后的特征
+            fused_img_emb = image_out.detach().clone()    # Img 模态经过 MMOE 后的特征
+            fused_text_emb = text_out.detach().clone()    # Text 模态经过 MMOE 后的特征
+            fused_global_emb = sequence_output.detach().clone()  # MMOE 全局融合特征
+        elif self.args.MLP:
+            sequence_output, attr_out, image_out, text_out = self.mlp(sequence_output, seq_attr_output, [img_emb, text_emb])
+            # 提取 MLP 融合后的单模态特征
+            fused_attr_emb = attr_out.detach().clone()
+            fused_img_emb = image_out.detach().clone()
+            fused_text_emb = text_out.detach().clone()
+            fused_global_emb = sequence_output.detach().clone()
+        elif self.args.Trans:
+            sequence_output, attr_out, image_out, text_out = self.trans(sequence_output, seq_attr_output, [img_emb, text_emb])
+            # 提取 Trans 融合后的单模态特征
+            fused_attr_emb = attr_out.detach().clone()
+            fused_img_emb = image_out.detach().clone()
+            fused_text_emb = text_out.detach().clone()
+            fused_global_emb = sequence_output.detach().clone()
 
-            # if self.args.debug_index == 1:
-            #     sequence_output,attr_out,image_out,text_out = self.mmoe1(sequence_output, attr_out, [image_out, text_out])
-            #     sequence_output,attr_out,image_out,text_out = self.mmoe2(sequence_output, attr_out, [image_out, text_out])
-          # ori: 1 2 3 4 5 6  # input 32,5 embed -> 32,5,64   32,5,|I|
-          # train seq: 1 2 3 4 5   sequence_output: 32,5,64    5,64   1:64*64  2:64  
-          # label seq: 2 3 4 5 6   loss pred 32,5 - label: 32,5 
-            return sequence_output, attr_out, image_out, text_out
-        elif hasattr(self.args, 'MLP') and self.args.MLP:
-            print("MMOE IS false IN MODELS and MLP is TRUE")
-            sequence_output ,attr_out,image_out,text_out = self.mlp(sequence_output, seq_attr_output, [img_emb, text_emb])
-            return sequence_output, attr_out, image_out, text_out
-        elif hasattr(self.args, 'Trans') and self.args.Trans:
-            # print("sequence_output shape:", sequence_output.shape)
-            # print("seq_attr_output shape:", seq_attr_output.shape)
-            # print("img_emb shape:", img_emb.shape)
-            # print("text_emb shape:", text_emb.shape)
-            sequence_output ,attr_out,image_out,text_out = self.trans(sequence_output, seq_attr_output, [img_emb, text_emb])
-            return sequence_output, attr_out, image_out, text_out
-        return sequence_output
+        original_embeddings = self._process_original_embeddings(
+            input_ids=input_ids,
+            id_emb=fused_global_emb,  
+            attr_emb=fused_attr_emb,
+            img_emb=fused_img_emb,
+            text_emb=fused_text_emb
+        )
+
+        if self.args.MMOE or self.args.MLP or self.args.Trans:
+            return sequence_output, attr_out, image_out, text_out, original_embeddings
+        return sequence_output, original_embeddings
+
+    def _process_original_embeddings(self, input_ids, id_emb, attr_emb, img_emb, text_emb):
+
+        mask = (input_ids > 0).bool()  # [batch_size, seq_len]，过滤padding用
+        processed_emb = {}
+
+        if id_emb is not None and id_emb.shape[0] > 0:
+            # 若全局特征是 [batch_size, seq_len, hidden_size]，过滤padding
+            if len(id_emb.shape) == 3:
+                id_emb_filtered = id_emb[mask].view(-1, id_emb.shape[-1])
+            else:
+                id_emb_filtered = id_emb  # 若已展平，直接使用
+            processed_emb['ID'] = id_emb_filtered.cpu().detach().numpy()
+        else:
+            processed_emb['ID'] = None
+
+        if attr_emb is not None and attr_emb.shape[0] > 0:
+            # 适配可能的维度（若 attr_out 是 [batch_size, seq_len, hidden_size]）
+            if len(attr_emb.shape) == 3:
+                attr_emb_filtered = attr_emb[mask].view(-1, attr_emb.shape[-1])
+            elif len(attr_emb.shape) == 2:
+                attr_emb_filtered = attr_emb  # 若已展平
+            else:
+                attr_emb_filtered = attr_emb.view(-1, attr_emb.shape[-1])  # 其他情况展平
+            processed_emb['Attr'] = attr_emb_filtered.cpu().detach().numpy()
+        else:
+            processed_emb['Attr'] = None
+
+        if img_emb is not None and img_emb.shape[0] > 0:
+            if len(img_emb.shape) == 3:
+                img_emb_filtered = img_emb[mask].view(-1, img_emb.shape[-1])
+            else:
+                img_emb_filtered = img_emb
+            processed_emb['Img'] = img_emb_filtered.cpu().detach().numpy()
+        else:
+            processed_emb['Img'] = None
+
+        if text_emb is not None and text_emb.shape[0] > 0:
+            if len(text_emb.shape) == 3:
+                text_emb_filtered = text_emb[mask].view(-1, text_emb.shape[-1])
+            else:
+                text_emb_filtered = text_emb
+            processed_emb['Text'] = text_emb_filtered.cpu().detach().numpy()
+        else:
+            processed_emb['Text'] = None
+
+        processed_emb['Fused'] = processed_emb['ID'].copy()  
+
+        processed_emb = {k: v for k, v in processed_emb.items() if v is not None and v.shape[0] > 0}
+        return processed_emb
 
     def init_weights(self, module):
         """ Initialize the weights.
@@ -393,7 +424,60 @@ class S3RecModel(nn.Module):
             module.weight.data.fill_(1.0)
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
+    def frank_wolfe_solver(self, task_grads, max_iter=20):
 
+        T = len(task_grads)
+
+        alpha = torch.ones(T, device=task_grads[0].device) / T
+
+        M = torch.zeros((T, T), device=task_grads[0].device)
+        for i in range(T):
+            for j in range(T):
+                M[i, j] = torch.dot(task_grads[i].flatten(), task_grads[j].flatten())
+
+
+        for _ in range(max_iter):
+            alpha_M = alpha @ M  # [1, T]
+            t_hat = torch.argmin(alpha_M)  # 标量
+            e_t_hat = torch.zeros(T, device=task_grads[0].device)
+            e_t_hat[t_hat] = 1.0
+            numerator = (e_t_hat - alpha) @ M @ e_t_hat
+            denominator = (e_t_hat - alpha) @ M @ (e_t_hat - alpha)
+            if denominator < 1e-8:
+                gamma = 0.0
+            else:
+                gamma = numerator / denominator
+            gamma = torch.clamp(gamma, 0.0, 1.0)
+
+            alpha = (1 - gamma) * alpha + gamma * e_t_hat
+
+            if gamma < 1e-6:
+                break
+
+        return alpha.detach()  
+    def compute_task_losses_and_grads(self, sequence_output, attr_out, image_out, text_out, target_pos, target_attr,loss):
+
+        task_losses = {}
+        task_shared_grads = []  
+
+        task_losses['rec'] = loss[0]
+        
+        task_losses['attr'] = loss[1]
+
+        task_losses['clip'] = loss[2]
+        shared_params = list(self.item_encoder.parameters()) + list(self.fusion_module.parameters()) 
+        for task_name, loss in task_losses.items():
+            for p in shared_params:
+                if p.grad is not None:
+                    p.grad.zero_()
+            loss.backward(retain_graph=True)  
+            grad = torch.cat([p.grad.flatten() for p in shared_params if p.grad is not None])
+            task_shared_grads.append(grad)
+            for p in shared_params:
+                if p.grad is not None:
+                    p.grad.zero_()
+
+        return task_losses, task_shared_grads, shared_params
 
 class Expert(nn.Module):
     def __init__(self, hidden_in, hidden_out, dropout):
@@ -448,8 +532,7 @@ class Gate(nn.Module):
         # return nn.functional.softmax(self.l1(x), -1)
         return nn.Softplus()(self.l1(x))
 
-# TODO multi task
-# TODO MLP
+
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, dropout):
         super(MLP, self).__init__()
@@ -535,8 +618,7 @@ class Trans_gate(nn.Module):
         self.attr_expert_num = args.modal_expert_num
         self.image_expert_num = args.modal_expert_num
         self.text_expert_num = args.modal_expert_num
-        self.concat_hidden = self.hidden * 2 + 2 * 512  # 计算拼接后的隐藏层维度
-        # 使用 TransformerBlock 替换原来的 Expert 模块
+        self.concat_hidden = self.hidden * 2 + 2 * 512 
         self.share_transformers = TransformerBlock(self.concat_hidden, args.num_heads, self.dropout)
 
         # self.main_gate = Gate(self.concat_hidden, self.share_expert_num)
@@ -551,14 +633,6 @@ class Trans_gate(nn.Module):
 
         self.text_transformers = TransformerBlock(self.concat_hidden, args.num_heads, self.dropout) 
         # self.text_gate = Gate(self.concat_hidden, self.share_expert_num + self.text_expert_num)
-
-        # 新增线性层用于将不同模态数据的维度统一
-        # self.sequence_expander = nn.Linear(64, self.concat_hidden)
-        # self.seq_attr_expander = nn.Linear(64, self.concat_hidden)
-        # self.image_emb_reducer = nn.Linear(512, self.concat_hidden)
-        # self.text_emb_reducer = nn.Linear(512, self.concat_hidden)
-
-        # 最终输出的线性层，将结果降维到所需的输出维度
         self.share_out_reducer = nn.Linear(self.concat_hidden, 64)
         self.attr_out_reducer = nn.Linear(self.concat_hidden, 64)
         self.image_out_reducer = nn.Linear(self.concat_hidden, 64)
@@ -588,7 +662,6 @@ class Trans_gate(nn.Module):
         text_out = self.text_out_reducer(text_out)
 
         return share_out, attr_out, image_out, text_out
-
 
 
 class mulit_gate(nn.Module):

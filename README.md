@@ -1,55 +1,42 @@
 Our code forked from https://github.com/aHuiWang/CIKM2020-S3Rec
 
-We provide the replication code for all experimental results. The specific steps are as follows:
-
-# Replicating Results of Enhanced Loss Function on CIKM2020-S3Rec
+The specific steps are as follows:
 
 ## Preparation 
 ```python
 pip install -r requirements.txt
 ```
 
-## Replicating Results
-### Introduction img result.
-![introduction](introduction.svg)
-We provide a simple script file for one-step reproduction of the experimental results presented in the introduction section.
+## Train/Fintune model
+### Note (from https://github.com/aHuiWang/CIKM2020-S3Rec)
 
+When you fine-tune the model, please check the log information. If it is
+```
+ckp_file Not Found! The Model is same as SASRec.
+```
+then you actually run the SASRec and the model's parameters are initialized randomly. Otherwise you would see
+```
+Load Checkpoint From ckp_path!
+```
+which means you successfully initialize the model with pre-trained parameters.
+
+### Note (from our datasets pretrained models)
+
+we provide our pretraind model on our four datasets in reproduce/(and the ckp is 200 except 150 for Scientific), you can download them first. 
+
+### Train
 ```python
-python run_introduction_experiment.py
+python run_test.py --output_dir （） --ckp 150 --data_name Scientific --Ours --MMOE
+```
+## Evaluate
+```python
+python run_test.py --output_dir （） --ckp 150 --data_name Scientific --Ours --MMOE --do_eval
 ```
 
-Result save at `./output/introduction/All_result.txt`, and the training log save at  `./output/introduction/.*`
+## NOTE
 
-### Experiment table result.
-![Table2](table2.jpg)
-
-We provide a convenient way to reproduce the experimental results in the table:
-
-```python
-sh table2_results.sh
+the path of the dataset and the pretrained model should be changed in the code ,and the path of the output_dir should be changed in the run_test.py
 ```
-
-Result will save at `output/` folder, and our training log already save at `our_output/` folder.
-
-# Replicating Results of Enhanced Loss Function on [Aprec repo](https://github.com/asash/bert4rec_repro).
-
-We did not fork the [Aprec repo](https://github.com/asash/bert4rec_repro) at this repo. But we provide code and tutorials to implement our enhanced  loss in Aprec repo.
-
-## [Turorials for Aprec](./Aprec_change/README.md)
-
-### Note
+the  model args can be modified in the code run_test.py
+```
 If you have any question please leave message at ISSUE.
-
-### Cite
-If you find the our codes and datasets useful for your research or development, please cite our paper:
-
-```
-@misc{li2023improving,
-      title={Improving Sequential Recommendation Models with an Enhanced Loss Function},
-      author={Fangyu Li and Shenbao Yu and Feng Zeng and Fang Yang},
-      year={2023},
-      eprint={2301.00979},
-      archivePrefix={arXiv},
-      primaryClass={cs.IR}
-}
-```
