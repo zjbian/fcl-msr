@@ -1,6 +1,6 @@
-# FCL-MSR: Feature-Consistent Learning for Multi-modal Sequential Recommendation
+# fCLI-MSR: Feature-Consistent Learning for Multi-modal Sequential Recommendation
 
-This repository contains the official implementation of our multi-modal sequential recommendation method, built upon [CIKM2020-S3Rec](https://github.com/aHuiWang/CIKM2020-S3Rec).
+This repository contains the official implementation of fCLI-MSR, built upon [CIKM2020-S3Rec](https://github.com/aHuiWang/CIKM2020-S3Rec).
 
 ## Overview
 

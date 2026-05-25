@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# FCL-MSR Experiment Script
+# fCLI-MSR Experiment Script
 # Usage:
 #   bash run.sh ablation  --dataset Scientific    # Ablation study
 #   bash run.sh lambda    --dataset Scientific    # Lambda grid search
