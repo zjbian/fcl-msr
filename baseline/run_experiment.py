@@ -10,9 +10,9 @@ import argparse
 
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
-from dataset_baseline import SASRecDataset
-from trainer_baseline import FinetuneTrainer
-from model_baseline import S3RecModel, GRU4Rec, SRGNN
+from baseline.dataset import SASRecDataset
+from baseline.trainer import FinetuneTrainer
+from baseline.model import S3RecModel, GRU4Rec, SRGNN
 from utils import EarlyStopping, get_user_seqs, get_item2attribute_json, check_path, set_seed
 
 def main():

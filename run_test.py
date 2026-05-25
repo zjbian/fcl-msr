@@ -20,7 +20,7 @@ except ImportError:
 
 
 def get_fusion_method(args):
-        """获取当前模型的融合方法类型"""
+        """Get the fusion method type."""
         if  args.MMOE:
             print("mmoe:",args.MMOE)
             return "MMOE"
@@ -117,7 +117,7 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     args.cuda_condition = torch.cuda.is_available() and not args.no_cuda
     
-####数据加载
+# Load data
     args.data_file = os.path.join(args.data_dir+args.data_name, args.data_name + '.txt')
     item2attribute_file = os.path.join(args.data_dir+args.data_name, args.data_name + '_item2attributes.json')
 
@@ -154,7 +154,7 @@ def main():
     # tensorboard 
     args.writer = None
 
-    # 加载多模态的数据multi-modal
+    # Load multi-modal data
     print("*********args.Ours**********",args.Ours)
     if args.Ours:
         if args.no_single_img:        
@@ -305,7 +305,7 @@ def main():
             print(f'Load model from {pretrained_path} for test!')
             all_embeddings = []
             
-            print("\n开始运行方法...")
+            print("\nStarting evaluation...")
             if args.plot_eval:
                 try:
                     _, _, collected_embeddings = trainer.test(0, full_sort=True, collect_embeddings=True)
@@ -321,11 +321,11 @@ def main():
                                     filtered_emb[k] = v
                         collected_embeddings = filtered_emb
                         all_embeddings.append(collected_embeddings)
-                        print(f"嵌入收集完成，有效模态：{list(collected_embeddings.keys())}")
+                        print(f"Embedding collection complete: {list(collected_embeddings.keys())}")
                     else:
-                        print(f"收集的嵌入格式错误（非字典），跳过该方法")
+                        print(f"Embedding format error (not dict), skipping")
                 except Exception as e:
-                    print(f"收集嵌入时出错：{str(e)}，跳过该方法")
+                    print(f"Embedding collection error: {str(e)}, skipping")
 
                 scores, result_info = trainer.test(0, full_sort=True)
                 full_info = result_info
@@ -333,7 +333,7 @@ def main():
                 save_dir = 'output_review/tsne'
                 for emb_dict in all_embeddings:
                     method = emb_dict.get('method', 'unknown')
-                    print(f"\n开始绘制 {method} 方法的可视化图...")
+                    print(f"\nGenerating visualization for {method}...")
                     plot_combined_visualization_tsne(
                         emb_dict=emb_dict,
                         data_name=args.data_name,
@@ -341,7 +341,7 @@ def main():
                         target_dim=64
                     )
 
-                print(f"\n对比可视化图已保存到：{save_dir}")
+                print(f"\nVisualization saved to: {save_dir}")
                 print('Test result score:',scores)
                 print('Test result:',result_info)
             else:
@@ -362,7 +362,7 @@ def main():
             
             early_stopping = EarlyStopping(args.checkpoint_path, patience=args.patience,verbose=True)
             
-            ##默认200轮
+            # Default: 200 epochs
             for epoch in range(args.epochs):
                 post_fix = trainer.train(epoch)
 
@@ -385,7 +385,7 @@ def main():
             # load the best model
             print("our best model:", args.checkpoint_path)
             trainer.model.load_state_dict(torch.load(args.checkpoint_path))
-            # 使用测试集的 dataloader 计算权重（仅用前5个 batch 以节省时间）
+            # Use test dataloader to compute weights (first 5 batches for efficiency)
             _, full_info = trainer.test(epoch, full_sort=True, verbose=True)
             
         

@@ -50,7 +50,7 @@ class Embeddings(nn.Module):
     def __init__(self, args):
         super(Embeddings, self).__init__()
 
-        self.item_embeddings = nn.Embedding(args.item_size, args.hidden_size, padding_idx=0) # 不要乱用padding_idx
+        self.item_embeddings = nn.Embedding(args.item_size, args.hidden_size, padding_idx=0)
         self.position_embeddings = nn.Embedding(args.max_seq_length, args.hidden_size)
 
         self.LayerNorm = LayerNorm(args.hidden_size, eps=1e-12)
@@ -65,7 +65,7 @@ class Embeddings(nn.Module):
         items_embeddings = self.item_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
         embeddings = items_embeddings + position_embeddings
-        # 修改属性
+        # Attribute embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -87,7 +87,7 @@ class SelfAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(args.attention_probs_dropout_prob)
 
-        # 做完self-attention 做一个前馈全连接 LayerNorm 输出
+        # Feed-forward + LayerNorm after self-attention
         self.dense = nn.Linear(args.hidden_size, args.hidden_size)
         self.LayerNorm = LayerNorm(args.hidden_size, eps=1e-12)
         self.out_dropout = nn.Dropout(args.hidden_dropout_prob)

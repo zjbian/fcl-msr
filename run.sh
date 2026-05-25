@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================================
-# FCL-MSR 实验脚本
-# 用法:
-#   bash run.sh ablation  --dataset Scientific    # 消融实验
-#   bash run.sh lambda    --dataset Scientific    # λ1/λ2 网格搜索
-#   bash run.sh mmoe      --dataset Scientific    # 专家数量搜索
-#   bash run.sh baseline                         # Table2 基线对比
+# FCL-MSR Experiment Script
+# Usage:
+#   bash run.sh ablation  --dataset Scientific    # Ablation study
+#   bash run.sh lambda    --dataset Scientific    # Lambda grid search
+#   bash run.sh mmoe      --dataset Scientific    # Expert count search
+#   bash run.sh baseline                         # Table2 baseline comparison
 # ============================================================================
 
 set -e
@@ -16,18 +16,18 @@ GPU_ID="${GPU_ID:-0}"
 CKP="${CKP:-200}"
 
 usage() {
-    echo "用法: bash run.sh <mode> [options]"
+    echo "Usage: bash run.sh <mode> [options]"
     echo ""
-    echo "模式:"
-    echo "  ablation   消融实验 (ablation_code 2~6)"
-    echo "  lambda     λ1/λ2 模态权重网格搜索"
-    echo "  mmoe       专家数量网格搜索"
-    echo "  baseline   Table2 基线模型对比 (run_experiment.py)"
+    echo "Modes:"
+    echo "  ablation   Ablation study (ablation_code 2~6)"
+    echo "  lambda     Lambda1/Lambda2 modality weight grid search"
+    echo "  mmoe       Expert count grid search"
+    echo "  baseline   Table2 baseline comparison (baseline/run_experiment.py)"
     echo ""
-    echo "环境变量:"
-    echo "  DATASET    数据集名称 (默认: Scientific)"
-    echo "  GPU_ID     GPU ID (默认: 0)"
-    echo "  CKP        预训练轮数 (默认: 200)"
+    echo "Environment variables:"
+    echo "  DATASET    Dataset name (default: Scientific)"
+    echo "  GPU_ID     GPU ID (default: 0)"
+    echo "  CKP        Pretrain checkpoint epochs (default: 200)"
     exit 0
 }
 
@@ -37,7 +37,7 @@ case "$MODE" in
         ;;
     
     ablation)
-        # 消融实验: clip特征提取(2), 属性编码(3), MOE(4), 去除文本(5), 去除图像(6)
+        # Ablation: CLIP feat(2), Attr encoder(3), MOE(4), no text(5), no image(6)
         case "$DATASET" in
             Scientific) L1=0.2; L2=0.1; MAIN=6; MODAL=6 ;;
             Pantry)     L1=1.0; L2=0.5; MAIN=4; MODAL=2 ;;
@@ -57,12 +57,12 @@ case "$MODE" in
         ;;
     
     lambda)
-        # λ1/λ2 模态权重网格搜索
+        # Lambda1/Lambda2 modality weight grid search
         OUTPUT="output/${DATASET}_lambda_search.txt"
         mkdir -p output
         for lambda1 in 0.1 0.2 0.5 1.0 1.5 3.0; do
             for lambda2 in 0.1 0.2 0.5 1.0 1.5 3.0; do
-                echo "=== λ1=$lambda1 λ2=$lambda2 ==="
+                echo "=== lambda1=$lambda1 lambda2=$lambda2 ==="
                 python run_test.py --Ours --gpu_id "$GPU_ID" --ckp "$CKP" \
                     --data_name "$DATASET" --lambda1 "$lambda1" --lambda2 "$lambda2" \
                     | tee -a "$OUTPUT"
@@ -71,8 +71,8 @@ case "$MODE" in
         ;;
     
     mmoe)
-        # 专家数量网格搜索
-        L1=1; L2=3  # 默认 λ 值
+        # Expert count grid search
+        L1=1; L2=3  # Default lambda values
         OUTPUT="output/${DATASET}_mmoe_search.txt"
         mkdir -p output
         for main_n in 10 8 6 4 2; do
@@ -87,15 +87,15 @@ case "$MODE" in
         ;;
     
     baseline)
-        # Table2 基线对比
+        # Table2 baseline comparison
         for ds in LastFM Beauty Toys_and_Games Sports_and_Outdoors Yelp; do
             echo "=== Baseline: $ds ==="
-            python run_experiment.py --data_name "$ds" --gpu_id "$GPU_ID"
+            python baseline/run_experiment.py --data_name "$ds" --gpu_id "$GPU_ID"
         done
         ;;
     
     *)
-        echo "未知模式: $MODE"
+        echo "Unknown mode: $MODE"
         usage
         ;;
 esac

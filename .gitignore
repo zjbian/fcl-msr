@@ -16,17 +16,13 @@ contrarec/
 *.png
 *.jpg
 *.svg
-
-# Manuscript PDF
 *.pdf
 
-# Local data dirs (keep data/ only for release)
+# Local temp files
 /Arts/
 /Instruments/
 /Pantry/
 /Scientific/
-
-# Temp data files
 environment_packages.txt
 fig7_data.txt
 fig8_data.txt
@@ -39,7 +35,7 @@ umap.tar.gz
 umap.zip
 data.zip
 
-# Review response files (not for release)
+# Local analysis scripts (not for release)
 CKA_ANALYSIS_PLAN.md
 COMPREHENSIVE_ANALYSIS_REPORT.md
 ENVIRONMENT_AND_COMPUTATION_ANALYSIS.md

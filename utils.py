@@ -29,7 +29,7 @@ def check_path(path):
         os.makedirs(path)
         print(f'{path} created')
 
-def neg_sample(item_set, item_size):  # 前闭后闭
+def neg_sample(item_set, item_size):  # inclusive range
     item = random.randint(1, item_size - 1)
     while item in item_set:
         item = random.randint(1, item_size - 1)
@@ -63,7 +63,7 @@ class EarlyStopping:
             return True
         elif self.mode == 'increase':
             for i in range(len(score)):
-                # 有一个指标增加了就认为是还在涨
+                # Improvement detected if any metric increases
                 if score[i] > self.best_score[i]+self.delta:
                     return False
             return True
@@ -88,7 +88,7 @@ class EarlyStopping:
     def save_checkpoint(self, score, model):
         '''Saves model when validation loss decrease.'''
         if self.verbose:
-            # ({self.score_min:.6f} --> {score:.6f}) # 这里如果是一个值的话输出才不会有问题
+            # Score: {self.score_min:.6f} --> {score:.6f}
             print(f'Validation score increased.  Saving model ...')
         torch.save(model.state_dict(), self.checkpoint_path)
         self.score_min = score
@@ -165,7 +165,7 @@ def get_user_seqs_long(data_file):
         user, items = line.strip().split(' ', 1)
         items = items.split(' ')
         items = [int(item) for item in items]
-        long_sequence.extend(items) # 后面的都是采的负例
+        long_sequence.extend(items)  # append negative samples
         user_seq.append(items)
         item_set = item_set | set(items)
     max_item = max(item_set)

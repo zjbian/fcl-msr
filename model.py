@@ -39,8 +39,6 @@ class S3RecModel(nn.Module):
 
         # multi-modal
         if hasattr(args, 'multi_modal_weight'):
-            # assert args.hidden_size == args.clip_hidden_unit, f"当前多模态模式仅支持 hidden_size 为 {args.clip_hidden_unit}, 目前为{args.hidden_size}"
-
             self.img_embeddings = nn.Embedding(args.item_size, args.clip_hidden_unit, padding_idx=0)
             self.text_embeddings = nn.Embedding(args.item_size, args.clip_hidden_unit, padding_idx=0)
             if self.args.ablation_code != 2:
@@ -51,7 +49,7 @@ class S3RecModel(nn.Module):
                     'weight': torch.tensor(args.multi_modal_weight['text_weights'], requires_grad=True).cuda().squeeze()
                 })
 
-            # 打开梯度更新会带来提升  no
+            # Freeze CLIP embeddings by default
             if not args.multi_modal_update:
                 self.img_embeddings.weight.requires_grad = False
                 self.text_embeddings.weight.requires_grad = False
@@ -170,7 +168,7 @@ class S3RecModel(nn.Module):
         sequence_emb = self.LayerNorm(sequence_emb)
         sequence_emb = self.dropout(sequence_emb)
 
-        # 在原始的emb经过 LN 和 dropout 后在添加img和text emb效果更好。
+        # Adding img/text embeddings after LN+dropout yields better performance.
         # if self.args.debug_code == 1:
         # if hasattr(self.args, 'multi_modal_weight'):
         #     img_emb = self.img_embeddings(sequence)
@@ -289,9 +287,9 @@ class S3RecModel(nn.Module):
         text_original_emb = None
         attr_original_emb = None
 
-        img_emb = None  # 初始化，避免未定义
+        img_emb = None
         text_emb = None
-        seq_attr_output = None  # 初始化
+        seq_attr_output = None
 
         if hasattr(self.args, 'multi_modal_weight'):
             img_emb = self.args.lambda1 * self.img_embeddings(input_ids)
@@ -330,21 +328,21 @@ class S3RecModel(nn.Module):
 
         if self.args.MMOE:
             sequence_output, attr_out, image_out, text_out = self.mmoe(sequence_output, seq_attr_output, [img_emb, text_emb])
-            # 提取 MMOE 融合后的单模态特征
-            fused_attr_emb = attr_out.detach().clone()    # Attr 模态经过 MMOE 后的特征
-            fused_img_emb = image_out.detach().clone()    # Img 模态经过 MMOE 后的特征
-            fused_text_emb = text_out.detach().clone()    # Text 模态经过 MMOE 后的特征
-            fused_global_emb = sequence_output.detach().clone()  # MMOE 全局融合特征
+            # Extract per-modality features after MMOE fusion
+            fused_attr_emb = attr_out.detach().clone()
+            fused_img_emb = image_out.detach().clone()
+            fused_text_emb = text_out.detach().clone()
+            fused_global_emb = sequence_output.detach().clone()
         elif self.args.MLP:
             sequence_output, attr_out, image_out, text_out = self.mlp(sequence_output, seq_attr_output, [img_emb, text_emb])
-            # 提取 MLP 融合后的单模态特征
+            # Extract per-modality features after MLP fusion
             fused_attr_emb = attr_out.detach().clone()
             fused_img_emb = image_out.detach().clone()
             fused_text_emb = text_out.detach().clone()
             fused_global_emb = sequence_output.detach().clone()
         elif self.args.Trans:
             sequence_output, attr_out, image_out, text_out = self.trans(sequence_output, seq_attr_output, [img_emb, text_emb])
-            # 提取 Trans 融合后的单模态特征
+            # Extract per-modality features after Transformer fusion
             fused_attr_emb = attr_out.detach().clone()
             fused_img_emb = image_out.detach().clone()
             fused_text_emb = text_out.detach().clone()
@@ -364,27 +362,27 @@ class S3RecModel(nn.Module):
 
     def _process_original_embeddings(self, input_ids, id_emb, attr_emb, img_emb, text_emb):
 
-        mask = (input_ids > 0).bool()  # [batch_size, seq_len]，过滤padding用
+        mask = (input_ids > 0).bool()  # [batch_size, seq_len], filter padding tokens
         processed_emb = {}
 
         if id_emb is not None and id_emb.shape[0] > 0:
-            # 若全局特征是 [batch_size, seq_len, hidden_size]，过滤padding
+            # If global features are [batch_size, seq_len, hidden_size], filter padding
             if len(id_emb.shape) == 3:
                 id_emb_filtered = id_emb[mask].view(-1, id_emb.shape[-1])
             else:
-                id_emb_filtered = id_emb  # 若已展平，直接使用
+                id_emb_filtered = id_emb
             processed_emb['ID'] = id_emb_filtered.cpu().detach().numpy()
         else:
             processed_emb['ID'] = None
 
         if attr_emb is not None and attr_emb.shape[0] > 0:
-            # 适配可能的维度（若 attr_out 是 [batch_size, seq_len, hidden_size]）
+            # Handle variable dimensional inputs
             if len(attr_emb.shape) == 3:
                 attr_emb_filtered = attr_emb[mask].view(-1, attr_emb.shape[-1])
             elif len(attr_emb.shape) == 2:
-                attr_emb_filtered = attr_emb  # 若已展平
+                attr_emb_filtered = attr_emb
             else:
-                attr_emb_filtered = attr_emb.view(-1, attr_emb.shape[-1])  # 其他情况展平
+                attr_emb_filtered = attr_emb.view(-1, attr_emb.shape[-1])
             processed_emb['Attr'] = attr_emb_filtered.cpu().detach().numpy()
         else:
             processed_emb['Attr'] = None
@@ -438,7 +436,7 @@ class S3RecModel(nn.Module):
 
         for _ in range(max_iter):
             alpha_M = alpha @ M  # [1, T]
-            t_hat = torch.argmin(alpha_M)  # 标量
+            t_hat = torch.argmin(alpha_M)
             e_t_hat = torch.zeros(T, device=task_grads[0].device)
             e_t_hat[t_hat] = 1.0
             numerator = (e_t_hat - alpha) @ M @ e_t_hat
@@ -546,7 +544,7 @@ class MLP(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = F.softmax(x, dim=-1)  # 使用 softmax 激活函数，确保输出是概率分布
+        x = F.softmax(x, dim=-1)  # softmax activation for probability output
         return x
 
 
@@ -589,7 +587,7 @@ class MLP_gate(nn.Module):
         else:
             self.concat_hidden = self.hidden * 2 + 2 * 512 
 
-        # 使用 MLP 替换 Expert 和 Gate
+        # MLP-based gating (replaces Expert + Gate)
         self.share_mlp = MLP(self.concat_hidden, self.hidden, self.hidden, self.dropout)
         self.attr_mlp = MLP(self.concat_hidden, self.hidden, self.hidden, self.dropout)
         self.image_mlp = MLP(self.concat_hidden, self.hidden, self.hidden, self.dropout)
@@ -600,7 +598,7 @@ class MLP_gate(nn.Module):
         x = torch.cat([seq_out, img_embed, text_embed, seq_attr], -1)
         
 
-        # 使用 MLP 进行特征提取
+        # MLP feature extraction
         share_out = self.share_mlp(x)
         attr_out = self.attr_mlp(x)
         image_out = self.image_mlp(x)
@@ -640,7 +638,7 @@ class Trans_gate(nn.Module):
 
     def forward(self, sequence_output, seq_attr_output, img_text):
         img_emb, text_emb = img_text
-        # 将不同模态的数据维度统一
+        # Unify modality dimensions via concatenation
         # sequence_output = self.sequence_expander(sequence_output)
         # seq_attr_output = self.seq_attr_expander(seq_attr_output)
         # img_emb = self.image_emb_reducer(img_emb)
@@ -655,7 +653,7 @@ class Trans_gate(nn.Module):
 
  
 
-        # 降维操作，将结果转换为所需的输出维度
+        # Project back to target output dimension
         share_out = self.share_out_reducer(share_out)
         attr_out = self.attr_out_reducer(attr_out)
         image_out = self.image_out_reducer(image_out)
