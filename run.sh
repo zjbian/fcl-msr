@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================================
-# fCLI-MSR Experiment Script
+# fCLI-MSR: Play No Favorites -- Matching and Balancing Multimodal Sequential
+# Representation for Recommendation
 # Usage:
 #   bash run.sh ablation  --dataset Scientific    # Ablation study
 #   bash run.sh lambda    --dataset Scientific    # Lambda grid search

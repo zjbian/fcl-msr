@@ -1,6 +1,6 @@
-# fCLI-MSR: Feature-Consistent Learning for Multi-modal Sequential Recommendation
+# fCLI-MSR: Play No Favorites — Matching and Balancing Multimodal Sequential Representation for Recommendation
 
-This repository contains the official implementation of fCLI-MSR, built upon [CIKM2020-S3Rec](https://github.com/aHuiWang/CIKM2020-S3Rec).
+This repository contains the official implementation of **fCLI-MSR**, built upon [CIKM2020-S3Rec](https://github.com/aHuiWang/CIKM2020-S3Rec).
 
 ## Overview
 
