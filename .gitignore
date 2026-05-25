@@ -8,6 +8,7 @@ output_*/
 sh_result*/
 sh_ablation/
 reproduce/
+reproduce_ours/
 contrarec/
 
 # Archives & images

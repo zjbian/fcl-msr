@@ -22,7 +22,7 @@ Supported fusion architectures: `MMOE`, `MLP`, `Transformer`.
 │
 ├── 🔑 Core Contribution
 │   ├── dataset.py               # Dataset classes (SASRecDataset, OODDataset)
-│   ├── model.py                 # S3RecModel with MMOE/MLP/Transformer fusion + Frank-Wolfe
+│   ├── model.py                 # S3RecModel + MMOE/MLP/Transformer fusion + Frank-Wolfe solver
 │   ├── trainer.py               # Multi-task trainer with auto-weight & loss plotting
 │   └── run_test.py              # Main entry point (training & evaluation)
 │
@@ -31,40 +31,21 @@ Supported fusion architectures: `MMOE`, `MLP`, `Transformer`.
 │   └── utils.py                 # Utilities (metrics, data loading, early stopping)
 │
 ├── 📊 Baseline Comparison (optional)
-│   ├── dataset_baseline.py      # Original S3Rec dataset
-│   ├── model_baseline.py        # S3Rec, GRU4Rec, SRGNN baselines
-│   ├── trainer_baseline.py      # Original S3Rec trainer
-│   ├── run_experiment.py        # Table 2: baseline model comparison
-│   └── run_introduction_experiment.py  # Loss function comparison
+│   └── baseline/
+│       ├── dataset.py           # Original S3Rec dataset
+│       ├── model.py             # S3Rec, GRU4Rec, SRGNN baselines
+│       ├── trainer.py           # Original S3Rec trainer
+│       ├── run_experiment.py    # Table 2: baseline model comparison
+│       └── run_introduction.py  # Loss function comparison
 │
-
-├── data/                        # 📦 Four benchmark datasets
-│   ├── Scientific/
-│   ├── Pantry/
-│   ├── Arts/
-│   └── Instruments/
-│
-└── reproduce_ours/              # 📦 Pretrained model checkpoints
-    ├── Scientific-epochs-150.pt
-    ├── Pantry-epochs-200.pt
-    ├── Arts-epochs-200.pt
-    └── Instruments-epochs-200.pt
+└── data/                        # 📦 Four benchmark datasets
+    ├── Scientific/
+    ├── Pantry/
+    ├── Arts/
+    └── Instruments/
 ```
 
-## Datasets
-
-We use four Amazon review datasets with multi-modal features:
-
-| Dataset | Users | Items | Interactions | Modality |
-|---------|-------|-------|-------------|----------|
-| Scientific | 13,100 | 4,386 | 250k | Image + Text (CLIP) |
-| Pantry | 6,065 | 1,714 | 128k | Image + Text (CLIP) |
-| Arts | 45,486 | 7,791 | 577k | Image + Text (CLIP) |
-| Instruments | 24,962 | 5,771 | 302k | Image + Text (CLIP) |
-
-Data format: each line is `user_id item1 item2 item3 ...`
-
-## Quick Start
+## Preparation
 
 ### 1. Install dependencies
 
@@ -72,31 +53,44 @@ Data format: each line is `user_id item1 item2 item3 ...`
 pip install -r requirements.txt
 ```
 
-### 2. Train
+### 2. Prepare CLIP features (required)
+
+This codebase uses **pre-extracted CLIP features** for image and text modalities. Before training, you need to:
+
+1. Use OpenAI's CLIP model (e.g., ViT-B/32) to extract image and text embeddings for each item
+2. Save the extracted features as a `.pkl` file containing a dict with keys `img_weights` and `text_weights`
+3. Update the path in `run_test.py` (line ~161) to point to your `.pkl` file
+
+The expected format:
+```python
+multi_modal_weight = {
+    'img_weights':  np.ndarray of shape (num_items, clip_hidden_dim),
+    'text_weights': np.ndarray of shape (num_items, clip_hidden_dim)
+}
+```
+
+### 3. Prepare datasets
+
+Download the Amazon review datasets and place them under `data/<DatasetName>/`:
+- `<DatasetName>.txt` — user sequences (format: `user_id item1 item2 ...`)
+- `<DatasetName>_item2attributes.json` — item-to-attribute mapping
+
+## Training
+
+**Training from scratch is fully supported** — no pretrained checkpoints required. The model initializes with random weights and trains end-to-end.
 
 ```bash
-# Train with MMOE fusion on Scientific dataset
-python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE --ckp 150
+# Train with MMOE fusion on Scientific dataset (from scratch)
+python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE
 
 # Train with MLP fusion
-python run_test.py --output_dir output/ --data_name Scientific --Ours --MLP --ckp 150
+python run_test.py --output_dir output/ --data_name Scientific --Ours --MLP
 
 # Train with Transformer fusion
-python run_test.py --output_dir output/ --data_name Scientific --Ours --Trans --ckp 150
+python run_test.py --output_dir output/ --data_name Scientific --Ours --Trans
 
-# Enable automatic multi-task weighting (Frank-Wolfe)
+# Enable automatic multi-task weighting (Frank-Wolfe solver)
 python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE --auto_weight
-```
-
-### 3. Evaluate
-
-```bash
-# Evaluate a trained model
-python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE --do_eval
-
-# Evaluate with embedding visualization
-python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE --do_eval --plot_eval
-```
 
 ### 4. Run ablation / hyperparameter search
 
@@ -117,8 +111,7 @@ bash run.sh baseline                       # Table 2 baselines
 | `--MMOE` | - | MMOE fusion architecture |
 | `--MLP` | - | MLP gating fusion |
 | `--Trans` | - | Transformer fusion |
-| `--auto_weight` | - | Auto multi-task weighting (Frank-Wolfe) |
-| `--ckp` | 200 | Pretraining epochs (150 for Scientific) |
+| `--auto_weight` | - | Auto multi-task weighting (Frank-Wolfe solver) |
 | `--lambda1` | 1.0 | Image modality weight |
 | `--lambda2` | 3.0 | Text modality weight |
 | `--main_expert_num` | 4 | Number of shared experts |
@@ -146,10 +139,10 @@ Use `--ablation_code` to study individual components:
 
 ## Note
 
-- The pretrained checkpoints in `reproduce_ours/` are required for training (they provide S3Rec-pretrained weights)
-- If the checkpoint is not found, the model falls back to SASRec (random initialization)
-- The data path in `run_test.py` (`--data_dir`) may need to be adjusted for your environment
-- For baseline comparison (Table 2), use `run_experiment.py` which supports GRU4Rec, SRGNN, and SASRec
+- **Training from scratch is fully supported** — no pretrained checkpoints needed
+- CLIP features must be pre-extracted and provided as `.pkl` files (see [Preparation](#2-prepare-clip-features-required))
+- The data path in `run_test.py` (`--data_dir`) may need adjustment for your environment
+- For baseline comparison (Table 2), use `baseline/run_experiment.py`
 
 ## Citation
 
