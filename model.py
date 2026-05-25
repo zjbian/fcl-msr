@@ -106,7 +106,7 @@ class S3RecModel(nn.Module):
         logits_per_text = logits_per_image.t()
 
         # label = torch.arange(sequence.shape[0]).cuda()
-        label = torch.arange(img_emb.shape[0],dtype=torch.long).cuda()
+        label = torch.arange(img_emb.shape[0], dtype=torch.long, device=img_emb.device)
         # print(label.shape, logits_per_image.shape)
         img_loss = torch.nn.CrossEntropyLoss()(logits_per_image, label)
         text_loss = torch.nn.CrossEntropyLoss()(logits_per_text, label)

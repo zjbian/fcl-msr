@@ -1,21 +1,56 @@
+# Python
 __pycache__/
-./output/
-./reproduce/
-./sh_ablation/
-./sh_result/
-./sh_result_[before 2024.4.7]/
-./output_ori/
-./output_review/
-./output_auto_1/
+*.pyc
 
+# Output directories
+output*/
+output_*/
+sh_result*/
+sh_ablation/
+reproduce/
+contrarec/
+
+# Archives & images
 *.zip
 *.tar.gz
 *.png
 *.jpg
 *.svg
-output*/
-reproduce/
-contrarec/
-sh_ablation/
-sh_result*/
-*.txt
+
+# Manuscript PDF
+*.pdf
+
+# Local data dirs (keep data/ only for release)
+/Arts/
+/Instruments/
+/Pantry/
+/Scientific/
+
+# Temp data files
+environment_packages.txt
+fig7_data.txt
+fig8_data.txt
+fig7_improved.png
+fig8_improved.png
+table2.jpg
+introduction.svg
+tsne.zip
+umap.tar.gz
+umap.zip
+data.zip
+
+# Review response files (not for release)
+CKA_ANALYSIS_PLAN.md
+COMPREHENSIVE_ANALYSIS_REPORT.md
+ENVIRONMENT_AND_COMPUTATION_ANALYSIS.md
+HYPERPARAMETER_GUIDE.md
+MODALITY_BALANCE_RESPONSE.md
+cka_expert_balance.py
+comprehensive_eval.py
+data_txt.py
+linear_probe.py
+OOD_test.py
+pic.py
+plot_cka_results.py
+representation_quality.py
+run_quick_tune_parallel.sh

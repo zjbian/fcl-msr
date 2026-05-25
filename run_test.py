@@ -8,12 +8,16 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
-from new_dataset import SASRecDataset
-from new_trainers import FinetuneTrainer
-from new_models import S3RecModel
+from dataset import SASRecDataset
+from trainer import FinetuneTrainer
+from model import S3RecModel
 from utils import EarlyStopping, get_user_seqs, get_item2attribute_json, check_path, set_seed, data_aug
 
-from pic import *
+try:
+    from pic import *
+except ImportError:
+    pass
+
 
 def get_fusion_method(args):
         """获取当前模型的融合方法类型"""
@@ -96,6 +100,7 @@ def main():
     parser.add_argument("--modal_expert_num", type=int, default=10)
     parser.add_argument("--num_heads", type=int, default=12)
     parser.add_argument("--ablation_code", type=int, default=0)
+    
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -323,6 +328,7 @@ def main():
                     print(f"收集嵌入时出错：{str(e)}，跳过该方法")
 
                 scores, result_info = trainer.test(0, full_sort=True)
+                full_info = result_info
 
                 save_dir = 'output_review/tsne'
                 for emb_dict in all_embeddings:
@@ -337,7 +343,9 @@ def main():
 
                 print(f"\n对比可视化图已保存到：{save_dir}")
                 print('Test result score:',scores)
-                print('Test result:',result_info)    
+                print('Test result:',result_info)
+            else:
+                _, full_info = trainer.test(0, full_sort=True)    
 
         ### model_train
         else:
@@ -389,8 +397,10 @@ def main():
             f.write(args_str + '\n')
             f.write(full_info + '\n')
 
-    
-        model_result[model_name] = model_name + ' full metric: ' + str(full_info)  + '\n' + \
+        if args.do_eval:
+            model_result[model_name] = model_name + ' full metric: ' + str(full_info)
+        else:
+            model_result[model_name] = model_name + ' full metric: ' + str(full_info)  + '\n' + \
                                 str(post_fix)
     
         del(model)
