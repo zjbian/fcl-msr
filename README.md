@@ -6,11 +6,11 @@ This repository contains the official implementation of **fCLI-MSR**, built upon
 
 We propose a **multi-modal sequential recommendation** framework that integrates item ID, visual (CLIP image), textual (CLIP text), and attribute modalities. The key components are:
 
-- **Multi-gate Mixture of Experts (MMOE)** for adaptive modality fusion
+- **Multi-modal Expert Network (MEN)** for adaptive modality fusion
 - **Frank-Wolfe solver** for automatic multi-task gradient balancing
 - **CLIP-pretrained features** as multi-modal item representations
 
-Supported fusion architectures: `MMOE`, `MLP`, `Transformer`.
+Supported fusion architectures: `MEN` (MMOE), `MLP`, `Transformer`.
 
 ## Project Structure
 
@@ -22,7 +22,7 @@ Supported fusion architectures: `MMOE`, `MLP`, `Transformer`.
 │
 ├── 🔑 Core Contribution
 │   ├── dataset.py               # Dataset classes (SASRecDataset, OODDataset)
-│   ├── model.py                 # S3RecModel + MMOE/MLP/Transformer fusion + Frank-Wolfe solver
+│   ├── model.py                 # S3RecModel + MEN(MMOE)/MLP/Transformer fusion + Frank-Wolfe solver
 │   ├── trainer.py               # Multi-task trainer with auto-weight & loss plotting
 │   └── run_test.py              # Main entry point (training & evaluation)
 │
@@ -80,7 +80,7 @@ Download the Amazon review datasets and place them under `data/<DatasetName>/`:
 **Training from scratch is fully supported** — no pretrained checkpoints required. The model initializes with random weights and trains end-to-end.
 
 ```bash
-# Train with MMOE fusion on Scientific dataset (from scratch)
+# Train with MEN fusion on Scientific dataset (from scratch)
 python run_test.py --output_dir output/ --data_name Scientific --Ours --MMOE
 
 # Train with MLP fusion
@@ -108,7 +108,7 @@ bash run.sh baseline                       # Table 2 baselines
 |----------|---------|-------------|
 | `--data_name` | Scientific | Dataset: Scientific, Pantry, Arts, Instruments |
 | `--Ours` | - | Enable multi-modal mode (required) |
-| `--MMOE` | - | MMOE fusion architecture |
+| `--MMOE` | - | MEN fusion architecture |
 | `--MLP` | - | MLP gating fusion |
 | `--Trans` | - | Transformer fusion |
 | `--auto_weight` | - | Auto multi-task weighting (Frank-Wolfe solver) |
@@ -133,7 +133,7 @@ Use `--ablation_code` to study individual components:
 | 1 | Full model (baseline) |
 | 2 | Remove CLIP feature extraction |
 | 3 | Remove attribute encoder |
-| 4 | Remove MMOE (single expert) |
+| 4 | Remove MEN (single expert) |
 | 5 | Remove text modality |
 | 6 | Remove image modality |
 
