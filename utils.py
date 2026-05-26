@@ -23,6 +23,7 @@ def set_seed(seed):
     # some cudnn methods can be random even after fixing the seed
     # unless you tell it to be deterministic
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def check_path(path):
     if not os.path.exists(path):

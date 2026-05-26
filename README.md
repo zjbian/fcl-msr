@@ -144,6 +144,18 @@ Use `--ablation_code` to study individual components:
 - The data path in `run_test.py` (`--data_dir`) may need adjustment for your environment
 - For baseline comparison (Table 2), use `baseline/run_experiment.py`
 
+## Reproducibility
+
+All random seeds are fixed via `utils.set_seed()` which sets seeds for Python `random`, NumPy, PyTorch, and CUDA, along with `cudnn.deterministic=True` and `cudnn.benchmark=False`. The seed is configurable via `--seed` (default: 23).
+
+To evaluate result stability across different random initializations, use the multi-seed evaluation script:
+
+```bash
+bash run_multi_seed.sh --data_name Scientific --Ours --MMOE
+```
+
+This runs the same configuration with 5 different seeds (23, 42, 101, 3407, 9999) and reports mean ± standard deviation of the evaluation metrics.
+
 ## Citation
 
 If you find this work useful, please cite our paper.

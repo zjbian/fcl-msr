@@ -17,7 +17,6 @@ contrarec/
 *.png
 *.jpg
 *.svg
-*.pdf
 
 # Local temp files
 /Arts/
