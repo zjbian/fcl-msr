@@ -55,25 +55,23 @@ pip install -r requirements.txt
 
 ### 2. Prepare CLIP features (required)
 
-This codebase uses **pre-extracted CLIP features** for image and text modalities. Before training, you need to:
+This codebase uses **pre-extracted CLIP features** for image and text modalities. These are pre-computed offline using a fine-tuned CLIP model (ViT-B/16 + BERT) and stored as `.pkl` files. They are **not included** in this repository due to size.
 
-1. Use OpenAI's CLIP model (e.g., ViT-B/32) to extract image and text embeddings for each item
-2. Save the extracted features as a `.pkl` file containing a dict with keys `img_weights` and `text_weights`
-3. Update the path in `run_test.py` (line ~161) to point to your `.pkl` file
+For each dataset, you need two `.pkl` files containing a dict with keys `img_weights` and `text_weights`:
+- `<DatasetName>_clip_weights_finetune_minloss.pkl` — CLIP features fine-tuned to minimize matching loss
+- Shape: `img_weights` and `text_weights` are both `(num_items, clip_hidden_dim)` arrays
 
-The expected format:
-```python
-multi_modal_weight = {
-    'img_weights':  np.ndarray of shape (num_items, clip_hidden_dim),
-    'text_weights': np.ndarray of shape (num_items, clip_hidden_dim)
-}
-```
+The raw images for each item should be placed under `<data_root>/<DatasetName>/imgs/` using the item ID as the folder name. The text descriptions are collected from open-source text databases (e.g., [VQ-Rec](https://github.com/RUCAIBox/VQ-Rec)).
+
+After preparing the CLIP `.pkl` files, update the path in `run_test.py` (line ~161) to point to your files.
 
 ### 3. Prepare datasets
 
-Download the Amazon review datasets and place them under `data/<DatasetName>/`:
-- `<DatasetName>.txt` — user sequences (format: `user_id item1 item2 ...`)
+Download the Amazon review datasets and place under `data/<DatasetName>/`:
+- `<DatasetName>.txt` — user interaction sequences (format: `user_id item1 item2 ...`)
 - `<DatasetName>_item2attributes.json` — item-to-attribute mapping
+
+The four preprocessed datasets used in the paper are from the [Amazon Product Reviews](https://nijianmo.github.io/amazon/index.html) collection (Scientific, Pantry, Instruments, Arts).
 
 ## Training
 

@@ -368,8 +368,8 @@ def main():
 
                 scores, _ = trainer.valid(epoch, full_sort=True, verbose=True)
                 print('Valid result score:',scores)
-                #print('Valid result:',np.array(scores[-2:]))
-                early_stopping(np.array(scores[-2:]), trainer.model)
+                # Monitor HIT@10 (index 2) and NDCG@10 (index 3) for early stopping
+                early_stopping(np.array(scores[2:4]), trainer.model)
                 if early_stopping.early_stop:
                     print("Early stopping")
                     break
