@@ -61,8 +61,6 @@ For each dataset, you need two `.pkl` files containing a dict with keys `img_wei
 - `<DatasetName>_clip_weights_finetune_minloss.pkl` — CLIP features fine-tuned to minimize matching loss
 - Shape: `img_weights` and `text_weights` are both `(num_items, clip_hidden_dim)` arrays
 
-The raw images for each item should be placed under `<data_root>/<DatasetName>/imgs/` using the item ID as the folder name. The text descriptions are collected from open-source text databases (e.g., [VQ-Rec](https://github.com/RUCAIBox/VQ-Rec)).
-
 After preparing the CLIP `.pkl` files, update the path in `run_test.py` (line ~161) to point to your files.
 
 ### 3. Prepare datasets
@@ -145,14 +143,6 @@ Use `--ablation_code` to study individual components:
 ## Reproducibility
 
 All random seeds are fixed via `utils.set_seed()` which sets seeds for Python `random`, NumPy, PyTorch, and CUDA, along with `cudnn.deterministic=True` and `cudnn.benchmark=False`. The seed is configurable via `--seed` (default: 23).
-
-To evaluate result stability across different random initializations, use the multi-seed evaluation script:
-
-```bash
-bash run_multi_seed.sh --data_name Scientific --Ours --MMOE
-```
-
-This runs the same configuration with 5 different seeds (23, 42, 101, 3407, 9999) and reports mean ± standard deviation of the evaluation metrics.
 
 ## Citation
 

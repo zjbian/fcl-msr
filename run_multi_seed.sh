@@ -25,7 +25,8 @@ for seed in "${SEEDS[@]}"; do
         --gpu_id "$GPU" \
         --seed $seed \
         $ARGS \
-        --epochs 1 \
+        --epochs 250 \
+        --patience 999 \
         2>&1 | grep -E "HIT@10|NDCG@10|full metric" | tee -a "$OUTPUT"
     echo "" | tee -a "$OUTPUT"
 done
